@@ -1,76 +1,121 @@
-[![MELPA](https://melpa.org/packages/exercism-badge.svg)](https://melpa.org/#/exercism)
+# exercism.el
 
-# Preamble
-[Exercism](https://exercism.org) is a great tool for learning new languages or diving deeper into familiar ones!
+Emacs integration for [Exercism](https://exercism.org).
 
-It offers not just a nice web editor but also a CLI if you want to use your local editor of choice. This package aims to streamline the latter, via Emacs!
+This is a modernized fork of [anonimitoraf/exercism.el](https://github.com/anonimitoraf/exercism.el) with fewer dependencies, an exercise list buffer with solved/unsolved status, and a self-check command.
 
-# Prerequisites
+## Prerequisites
+
 Download the `exercism` CLI by following [the official guide](https://exercism.org/cli-walkthrough).
 
-# Quick Start
-- Install - it's available on Melpa!
-- Load `exercism` via `(require 'exercism)` or `(use-package exercism)` or equivalent
-- Invoke the command `exercism`. It will popup a [transient](https://github.com/magit/transient) menu (similar to our beloved `magit`!)
+## Dependencies
+
+- Emacs 29.1+
+- [request](https://github.com/tkf/emacs-request)
+- [transient](https://github.com/magit/transient)
+
+## Quick Start
+
+```emacs-lisp
+(use-package request
+  :ensure t
+  :defer t)
+
+(use-package exercism
+  :ensure nil
+  :load-path "~/projects/mine/exercism.el"
+  :commands (exercism exercism-configure exercism-cli-version exercism-self-check
+                      exercism-list-exercises exercism-list-unsolved-exercises)
+  :bind (("C-c x" . exercism)))
+```
+
+Invoke `M-x exercism` or `C-c x` to open the transient menu.
+
 <img src="./demos/menu.png" width=300 />
 
-## `Configure`
-[Get your API token](https://exercism.org/settings/api_cli) and pop it into the prompt. This is a once-off configuration (unless you reset your token).
+## Configure
 
-https://user-images.githubusercontent.com/15933322/190892930-2ff737ae-f672-4688-ab0d-7f655508da77.mov
+[Get your API token](https://exercism.org/settings/api_cli) and run `M-x exercism-configure`.
 
-### `Path Configuration`
-Before customizing `exercism--workspace`, be sure to change it on the CLI first:
+### Path Configuration
+
+Before customizing `exercism--workspace`, change it on the CLI first:
 
 ```bash
 exercism -w "path/to/dir"
 ```
-#### [no-littering](https://github.com/emacscollective/no-littering)
-Users of this package can "theme" the directory of this package rather simply:
+
+#### no-littering
 
 ```emacs-lisp
-(setq (exercism--workspace (no-littering-expand-var-file-name "exercism/")))
+(setq exercism--workspace (no-littering-expand-var-file-name "exercism/"))
 ```
 
-This sets the workspace to the var directory inside your emacs folder.
+## Set Current Track
 
-## `Set current track`
-  - Choose the track that you want to do exercises for.
-  - This might take a few minutes the first time because it "initializes" the track locally. Subsequent invocations will be instant.
+Choose the track you want to work on. The first run may take a few minutes while the track initializes locally.
 
-https://user-images.githubusercontent.com/15933322/190892892-02f53f4c-07f8-4d85-ad2c-19ff1351c37a.mp4
+## List Exercises
 
-## `Open an exercise`
-Time to get into it! Note that some exercises are actually still locked, yet "select-able" (see the "Known Limitations" section).
-Note that you need to have a network connection (since this package needs to query the exercism API). If you need to work offline,
-pre-download all the exercises beforehand (see `Download all unlocked exercises`).
+- `l` — list all exercises with solved/unsolved status
+- `u` — list unsolved exercises only
 
-<img src="./demos/open-exercise.png" width=700 />
+The exercise list buffer supports:
 
-## `Download all unlocked exercises`
-If you want to do all the exercises locally, you can download them all. Note that this only includes exercises unlocked for you.
+- `RET` — open exercise (downloads if needed)
+- `s` — submit exercise
+- `n` / `p` — move between exercises
+- `g` — reload list
+- `q` — quit
 
-## `Open a downloaded exercise`
-If you are working offline and have downloaded exercises previously, you can open one of those.
+## Open an Exercise
 
-## `Run tests`
-Run tests! You can see the results in the `*compilation*` buffer.
+Open exercises from the list buffer, or use `e` to open a previously downloaded exercise offline.
 
-(Only for CLI version 3.2.0 onwards, (run `exercism-cli-version` to check))
+## Download All Unlocked Exercises
 
-## `Submit`
-Submits the current directory as a solution. Note that to mark the exercise as "completed", you'll have to do it via the web app.
+Use `d` in the transient menu to download all unlocked exercises for the current track.
 
-https://user-images.githubusercontent.com/15933322/190892957-b7ae8c3c-40e2-4a81-b737-3e504d18fed8.mp4
+## Run Tests
 
-## `Submit (then open in browser)`
-Similar to `Submit` but automatically opens the exercise in the browser after submission. So if you want to mark your solution as "complete", you'd probably want to use this.
+Run tests for the current exercise. Results appear in `*compilation*`.
 
-https://user-images.githubusercontent.com/15933322/190892960-8b82c3b8-55f5-4eea-8091-293569f9231a.mp4
+Requires Exercism CLI 3.2.0+ (`M-x exercism-cli-version`).
 
-# Known Limitations
-- Registering yourself to a track isn't currently supported. You'll have to do this via [their web app](https://exercism.org/tracks), sorry!
-- The exercises list that you choose from, also includes "not yet unlocked" ones. This is due to the the fact that the CLI doesn't support listing out exercises.
+## Submit
 
-# Contributing
-- All PRs, suggestions, complaints and anything in between are welcome!
+- `s` — submit current exercise
+- `S` — submit, then open the submission page in a browser
+
+Marking an exercise as complete still happens on the Exercism website.
+
+## Self-Check
+
+`?` or `M-x exercism-self-check` verifies CLI setup, config, token, workspace, and API connectivity.
+
+## Testing
+
+From the repository root:
+
+```bash
+./scripts/run-exercism-ert.sh
+```
+
+By default, dependencies are loaded from `~/.emacs.d/elpa`. Override with:
+
+```bash
+EMACS_USER_DIR=~/.emacs.d ./scripts/run-exercism-ert.sh
+```
+
+## Known Limitations
+
+- Registering for a track is not supported in Emacs; use the [Exercism website](https://exercism.org/tracks).
+- The exercise list may include locked exercises because the CLI does not expose unlock status alone.
+
+## Contributing
+
+PRs, suggestions, and bug reports are welcome.
+
+## License
+
+GPL-3.0-or-later
