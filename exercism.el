@@ -977,8 +977,7 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
    ("c" "Configure" exercism-configure)
    ("l" "List exercises (with status)" exercism-list-exercises)
    ("u" "List unsolved exercises" exercism-list-unsolved-exercises)
-   ("r" "Run tests" exercism-run-tests)
-   ("s" "Submit" exercism-submit)])
+   ("r" "Run tests" exercism-run-tests)])
 
 (exercism--load-state)
 (exercism--reconcile-state-with-config)
