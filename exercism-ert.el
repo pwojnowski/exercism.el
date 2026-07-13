@@ -41,11 +41,11 @@
   "Return the display text of a propertized exercise list LABEL."
   (substring-no-properties label))
 
-(defun exercism-ert--with-exercise-list (exercises solutions only-unsolved-p body)
+(defun exercism-ert--with-exercise-list (exercises solutions body)
   "Show exercise list in a temp buffer and run BODY there."
   (unwind-protect
       (let ((exercism--current-track "emacs-lisp"))
-        (exercism--show-exercise-list exercises solutions only-unsolved-p)
+        (exercism--show-exercise-list exercises solutions)
         (with-current-buffer exercism--exercise-list-buffer-name
           (funcall body)))
     (when (get-buffer exercism--exercise-list-buffer-name)
@@ -60,6 +60,16 @@
         (throw 'found t))
       (forward-line 1))
     (error "Exercise row not found: %s" slug)))
+
+(defun exercism-ert--exercise-slugs-in-buffer ()
+  "Return exercise slugs in their displayed order."
+  (let (slugs)
+    (goto-char (point-min))
+    (while (not (eobp))
+      (when-let ((slug (get-text-property (point) 'exercism-exercise-slug)))
+        (push slug slugs))
+      (forward-line 1))
+    (nreverse slugs)))
 
 (defun exercism-ert--find-file-recorder (orig file &rest args)
   "Advice that records the file passed to `find-file'."
@@ -206,7 +216,6 @@
   (exercism-ert--with-exercise-list
    (exercism-ert--sample-exercises)
    (exercism-ert--make-solution-table nil)
-   nil
    (lambda ()
      (should (exercism-exercise-list--line-for-slug "two-fer"))
      (should (null (exercism-exercise-list--line-for-slug "missing-slug"))))))
@@ -226,7 +235,6 @@
                    (blurb . "Reverse it")
                    (is_unlocked . t)))
            (exercism-ert--make-solution-table nil)
-           nil
            (lambda ()
              (setq exercism--current-track track
                    exercism--workspace workspace
@@ -261,7 +269,6 @@
                    (blurb . "Reverse it")
                    (is_unlocked . t)))
            (exercism-ert--make-solution-table nil)
-           nil
            (lambda ()
              (setq exercism--current-track track
                    exercism--workspace workspace
@@ -359,7 +366,7 @@
                        ("bob" . nil)))))
     (unwind-protect
         (let ((exercism--current-track "emacs-lisp"))
-          (exercism--show-exercise-list exercises solutions nil)
+          (exercism--show-exercise-list exercises solutions)
           (with-current-buffer exercism--exercise-list-buffer-name
             (let ((content (buffer-string)))
               (should (string-match-p "Exercism Exercises" content))
@@ -372,6 +379,19 @@
       (when (get-buffer exercism--exercise-list-buffer-name)
         (kill-buffer exercism--exercise-list-buffer-name)))))
 
+(ert-deftest exercism-exercise-list-orders-solved-last-stably ()
+  (exercism-ert--with-exercise-list
+   (exercism-ert--sample-exercises)
+   (exercism-ert--make-solution-table
+    '(("hello-world" . "published")
+      ("two-fer" . "started")
+      ("secret-handshake" . "completed")
+      ("bob" . nil)))
+   (lambda ()
+     (should
+      (equal '("two-fer" "bob" "hello-world" "secret-handshake")
+             (exercism-ert--exercise-slugs-in-buffer))))))
+
 (ert-deftest exercism-exercise-list-mode-activation ()
   (exercism-ert--with-exercise-list
    (exercism-ert--sample-exercises)
@@ -379,7 +399,6 @@
     '(("hello-world" . "published")
       ("two-fer" . "started")
       ("bob" . nil)))
-   nil
    (lambda ()
      (should (derived-mode-p 'exercism-exercise-list-mode)))))
 
@@ -390,7 +409,6 @@
     '(("hello-world" . "published")
       ("two-fer" . "started")
       ("bob" . nil)))
-   nil
    (lambda ()
      (exercism-ert--goto-exercise-slug "hello-world")
      (should (equal "hello-world"
@@ -408,9 +426,8 @@
     '(("hello-world" . "published")
       ("two-fer" . "started")
       ("bob" . nil)))
-   nil
    (lambda ()
-     (should (equal "hello-world"
+     (should (equal "two-fer"
                     (get-text-property (point) 'exercism-exercise-slug))))))
 
 (ert-deftest exercism-exercise-list--slug-at-point ()
@@ -420,7 +437,6 @@
     '(("hello-world" . "published")
       ("two-fer" . "started")
       ("bob" . nil)))
-   nil
    (lambda ()
      (exercism-ert--goto-exercise-slug "two-fer")
      (should (equal "two-fer" (exercism-exercise-list--slug-at-point)))
@@ -434,11 +450,11 @@
     '(("hello-world" . "published")
       ("two-fer" . "started")
       ("bob" . nil)))
-   nil
    (lambda ()
-     (exercism-ert--goto-exercise-slug "hello-world")
+     (exercism-ert--goto-exercise-slug "two-fer")
      (exercism-exercise-list-next)
-     (should (equal "two-fer" (exercism-exercise-list--slug-at-point))))))
+     (should (equal "secret-handshake"
+                    (exercism-exercise-list--slug-at-point))))))
 
 (ert-deftest exercism-exercise-list-previous ()
   (exercism-ert--with-exercise-list
@@ -447,11 +463,10 @@
     '(("hello-world" . "published")
       ("two-fer" . "started")
       ("bob" . nil)))
-   nil
    (lambda ()
-     (exercism-ert--goto-exercise-slug "two-fer")
+     (exercism-ert--goto-exercise-slug "secret-handshake")
      (exercism-exercise-list-previous)
-     (should (equal "hello-world" (exercism-exercise-list--slug-at-point))))))
+     (should (equal "two-fer" (exercism-exercise-list--slug-at-point))))))
 
 (ert-deftest exercism-exercise-list-reload-key ()
   (should (eq #'exercism-exercise-list-reload
@@ -479,7 +494,6 @@
   (exercism-ert--with-exercise-list
    (exercism-ert--sample-exercises)
    (exercism-ert--make-solution-table nil)
-   nil
    (lambda ()
      (exercism-ert--goto-exercise-slug "two-fer")
      (setq exercism-ert--browse-url-target nil)
@@ -494,7 +508,6 @@
   (exercism-ert--with-exercise-list
    (exercism-ert--sample-exercises)
    (exercism-ert--make-solution-table nil)
-   nil
    (lambda ()
      (goto-char (point-min))
      (should-error (exercism-exercise-list-open-in-browser) :type 'user-error))))
@@ -507,7 +520,6 @@
   (exercism-ert--with-exercise-list
    (exercism-ert--sample-exercises)
    (exercism-ert--make-solution-table nil)
-   nil
    (lambda ()
      (exercism-ert--goto-exercise-slug "secret-handshake")
      (should-error (exercism-exercise-list-submit-exercise) :type 'user-error))))
@@ -527,7 +539,6 @@
           (exercism-ert--with-exercise-list
            (exercism-ert--sample-exercises)
            (exercism-ert--make-solution-table nil)
-           nil
            (lambda ()
              (exercism-ert--goto-exercise-slug slug)
              (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) t)))
@@ -541,7 +552,6 @@
   (exercism-ert--with-exercise-list
    (exercism-ert--sample-exercises)
    (exercism-ert--make-solution-table nil)
-   nil
    (lambda ()
      (setq exercism-ert--submit-slug nil)
      (advice-add #'exercism--submit-slug :around #'exercism-ert--submit-slug-recorder)
@@ -569,23 +579,9 @@
   (exercism-ert--with-exercise-list
    (exercism-ert--sample-exercises)
    (exercism-ert--make-solution-table nil)
-   t
    (lambda ()
-     (should exercism-exercise-list-only-unsolved-p)
      (should (equal (exercism-ert--sample-exercises)
                     exercism-exercise-list-exercises)))))
-
-(ert-deftest exercism-exercise-list-filtered-header-counts ()
-  (exercism-ert--with-exercise-list
-   (exercism-ert--sample-exercises)
-   (exercism-ert--make-solution-table
-    '(("hello-world" . "published")
-      ("two-fer" . "started")
-      ("bob" . nil)))
-   t
-   (lambda ()
-     (should (string-match-p "Exercises: 3 (unsolved only)" (buffer-string)))
-     (should (string-match-p "Solved: 1 | Unsolved: 3" (buffer-string))))))
 
 (ert-deftest exercism-exercise-list-reload ()
   (exercism-ert--with-exercise-list
@@ -594,7 +590,6 @@
     '(("hello-world" . "published")
       ("two-fer" . "started")
       ("bob" . nil)))
-   t
    (lambda ()
      (should (string-match-p "Solved: 1 | Unsolved: 3" (buffer-string)))
      (unwind-protect
@@ -602,50 +597,13 @@
            (advice-add #'exercism--with-track-exercises-and-solutions :around
                        #'exercism-ert--with-track-recorder-all-solved)
            (exercism-exercise-list-reload)
-           (should (string-match-p "Exercises: 0" (buffer-string)))
-           (should (string-match-p "unsolved only" (buffer-string)))
-           (should (string-match-p "Solved: 4 | Unsolved: 0" (buffer-string)))
-           (should exercism-exercise-list-only-unsolved-p))
+           (should (string-match-p "Exercises: 4" (buffer-string)))
+           (should (string-match-p "Solved: 4 | Unsolved: 0" (buffer-string))))
        (advice-remove #'exercism--with-track-exercises-and-solutions
                       #'exercism-ert--with-track-recorder-all-solved)))))
 
-(defvar exercism-ert--with-track-call-count 0)
-
-(defun exercism-ert--with-track-call-recorder (orig callback)
-  "Advice that counts calls to `exercism--with-track-exercises-and-solutions'."
-  (cl-incf exercism-ert--with-track-call-count)
-  (funcall orig callback))
-
-(ert-deftest exercism-exercise-list-toggle-unsolved-only-key ()
-  (should (eq #'exercism-exercise-list-toggle-unsolved-only
-              (lookup-key exercism-exercise-list-mode-map "u"))))
-
-(ert-deftest exercism-exercise-list-toggle-unsolved-only ()
-  (exercism-ert--with-exercise-list
-   (exercism-ert--sample-exercises)
-   (exercism-ert--make-solution-table
-    '(("hello-world" . "published")
-      ("two-fer" . "started")
-      ("bob" . nil)))
-   nil
-   (lambda ()
-     (should (string-match-p "Exercises: 4" (buffer-string)))
-     (setq exercism-ert--with-track-call-count 0)
-     (advice-add #'exercism--with-track-exercises-and-solutions :around
-                 #'exercism-ert--with-track-call-recorder)
-     (unwind-protect
-         (progn
-           (exercism-exercise-list-toggle-unsolved-only)
-           (should exercism-exercise-list-only-unsolved-p)
-           (should (string-match-p "Exercises: 3 (unsolved only)" (buffer-string)))
-           (should (string-match-p "Solved: 1 | Unsolved: 3" (buffer-string)))
-           (should (zerop exercism-ert--with-track-call-count))
-           (exercism-exercise-list-toggle-unsolved-only)
-           (should (not exercism-exercise-list-only-unsolved-p))
-           (should (string-match-p "Exercises: 4" (buffer-string)))
-           (should (zerop exercism-ert--with-track-call-count)))
-       (advice-remove #'exercism--with-track-exercises-and-solutions
-                      #'exercism-ert--with-track-call-recorder)))))
+(ert-deftest exercism-exercise-list-unsolved-toggle-key-removed ()
+  (should-not (lookup-key exercism-exercise-list-mode-map "u")))
 
 (ert-deftest exercism--primary-solution-file ()
   (let* ((exercise-dir (make-temp-file "exercism-exercise" 'dir))
@@ -740,7 +698,6 @@
   (exercism-ert--with-exercise-list
    (exercism-ert--sample-exercises)
    (exercism-ert--make-solution-table nil)
-   nil
    (lambda ()
      (exercism-ert--goto-exercise-slug "secret-handshake")
      (should-error (exercism-exercise-list-open-exercise) :type 'user-error))))
@@ -762,7 +719,6 @@
             '(("hello-world" . "published")
               ("two-fer" . "started")
               ("bob" . nil)))
-           nil
            (lambda ()
              (exercism-ert--goto-exercise-slug slug)
              (exercism-exercise-list-open-exercise)
@@ -771,25 +727,6 @@
                      #'exercism-ert--open-slug-recorder)
       (when (file-exists-p workspace)
         (delete-directory workspace t)))))
-
-(ert-deftest exercism--show-exercise-list-unsolved-only ()
-  (let ((exercises (exercism-ert--sample-exercises))
-        (solutions (exercism-ert--make-solution-table
-                     '(("hello-world" . "published")
-                       ("two-fer" . "started")
-                       ("bob" . nil)))))
-    (unwind-protect
-        (let ((exercism--current-track "emacs-lisp"))
-          (exercism--show-exercise-list exercises solutions t)
-          (with-current-buffer exercism--exercise-list-buffer-name
-            (let ((content (buffer-string)))
-              (should (string-match-p "unsolved only" content))
-              (should (string-match-p "Exercises: 3" content))
-              (should (string-match-p "Solved: 1 | Unsolved: 3" content))
-              (should (not (string-match-p "hello-world" content)))
-              (should (string-match-p "two-fer" content)))))
-      (when (get-buffer exercism--exercise-list-buffer-name)
-        (kill-buffer exercism--exercise-list-buffer-name)))))
 
 (provide 'exercism-ert)
 ;;; exercism-ert.el ends here

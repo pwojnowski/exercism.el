@@ -53,12 +53,11 @@ Choose the track you want to work on. The first run may take a few minutes while
 
 ## List Exercises
 
-`M-x exercism` or `C-c x` opens the exercise list with solved/unsolved status for every exercise on the current track.
+`M-x exercism` or `C-c x` opens the exercise list with solved/unsolved status for every exercise on the current track. Unsolved exercises retain the track's response order, followed by solved exercises in their response order.
 
 The exercise list buffer supports:
 
 - `RET` — open exercise (downloads if needed)
-- `u` — toggle unsolved-only filter
 - `s` — submit exercise
 - `n` / `p` — move between exercises
 - `g` — reload list
