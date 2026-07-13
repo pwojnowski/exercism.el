@@ -330,7 +330,9 @@ Optional FRAME cycles animation when STATE is `submitting'."
     (define-key map (kbd "g") #'exercism-exercise-list-reload)
     (define-key map (kbd "d") #'exercism-download-all-unlocked-exercises)
     (define-key map (kbd "t") #'exercism-exercise-list-set-track)
+    (define-key map (kbd "c") #'exercism-configure)
     (define-key map (kbd "s") #'exercism-exercise-list-submit-exercise)
+    (define-key map (kbd "r") #'exercism-exercise-list-run-tests)
     (define-key map (kbd "S") #'exercism-exercise-list-submit-then-open-in-browser)
     (define-key map (kbd "b") #'exercism-exercise-list-open-in-browser)
     (define-key map (kbd "?") #'exercism-self-check)
@@ -545,7 +547,7 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
         (erase-buffer)
         (insert title "\n")
         (insert (make-string (length title) ?=) "\n\n")
-        (insert "RET open | b browser | s submit | S submit+browser | d download all | n/p move | g reload | t track | ? self-check | q quit\n\n")
+        (insert "RET open | b browser | s submit | S submit+browser | r test | d download all | n/p move | g reload | t track | c configure | ? self-check | q quit\n\n")
         (insert (format "Track: %s\n" exercism--current-track))
         (insert (format "Exercises: %d" (length filtered)))
         (when only-unsolved-p
@@ -953,31 +955,56 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
                                             (format "%s" error-thrown)))
               (exercism--self-check-done)))))
 
-(defun exercism-run-tests ()
-  "Run tests for the current exercise."
-  (interactive)
+(defun exercism--run-tests-in-dir (exercise-dir)
+  "Run Exercism CLI tests in EXERCISE-DIR."
   (exercism--cli-version
    (lambda (version)
      (let ((min-version "3.2.0"))
-       (if (not version)
-           (message "[exercism] error: could not determine CLI version")
-         (if (exercism--compare-semvers version #'< min-version)
-             (message "[exercism] error: running tests requires CLI %s+ (you have %s)"
-                      min-version version)
-           (let* ((track-dir (expand-file-name exercism--current-track exercism--workspace))
-                  (exercise-dir (expand-file-name exercism--current-exercise track-dir))
-                  (default-directory exercise-dir)
-                  (compile-command (concat (shell-quote-argument exercism-executable)
-                                           " test")))
-             (compile compile-command))))))))
+       (cond
+        ((not version)
+         (message "[exercism] error: could not determine CLI version"))
+        ((exercism--compare-semvers version #'< min-version)
+         (message "[exercism] error: running tests requires CLI %s+ (you have %s)"
+                  min-version version))
+        (t
+         (let* ((default-directory exercise-dir)
+                (compile-command (concat (shell-quote-argument exercism-executable)
+                                         " test")))
+           (compile compile-command))))))))
+
+(defun exercism--run-tests-for-slug (slug)
+  "Run tests for SLUG on `exercism--current-track'."
+  (exercism--ensure-current-track)
+  (let ((exercise-dir (expand-file-name slug
+                                        (expand-file-name exercism--current-track
+                                                          exercism--workspace))))
+    (unless (file-directory-p exercise-dir)
+      (user-error "Exercise %s is not downloaded" slug))
+    (exercism--run-tests-in-dir exercise-dir)))
+
+(defun exercism-run-tests ()
+  "Run tests for the current exercise."
+  (interactive)
+  (unless exercism--current-exercise
+    (user-error "No current exercise"))
+  (exercism--run-tests-for-slug exercism--current-exercise))
+
+(defun exercism-exercise-list-run-tests ()
+  "Run tests for the exercise on the current line."
+  (interactive)
+  (let ((slug (exercism-exercise-list--slug-at-point))
+        (unlocked-p (get-text-property (point) 'exercism-exercise-unlocked)))
+    (unless slug
+      (user-error "Not on an exercise row"))
+    (unless unlocked-p
+      (user-error "Exercise %s is locked" slug))
+    (exercism--run-tests-for-slug slug)))
 
 (transient-define-prefix exercism ()
   "Bring up the Exercism action menu."
   [:description exercism--transient-name
-   ("c" "Configure" exercism-configure)
    ("l" "List exercises (with status)" exercism-list-exercises)
-   ("u" "List unsolved exercises" exercism-list-unsolved-exercises)
-   ("r" "Run tests" exercism-run-tests)])
+   ("u" "List unsolved exercises" exercism-list-unsolved-exercises)])
 
 (exercism--load-state)
 (exercism--reconcile-state-with-config)
