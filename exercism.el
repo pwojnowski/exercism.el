@@ -333,6 +333,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
     (define-key map (kbd "s") #'exercism-exercise-list-submit-exercise)
     (define-key map (kbd "S") #'exercism-exercise-list-submit-then-open-in-browser)
     (define-key map (kbd "b") #'exercism-exercise-list-open-in-browser)
+    (define-key map (kbd "?") #'exercism-self-check)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `exercism-exercise-list-mode'.")
@@ -544,7 +545,7 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
         (erase-buffer)
         (insert title "\n")
         (insert (make-string (length title) ?=) "\n\n")
-        (insert "RET open | b browser | s submit | S submit+browser | d download all | n/p move | g reload | t track | q quit\n\n")
+        (insert "RET open | b browser | s submit | S submit+browser | d download all | n/p move | g reload | t track | ? self-check | q quit\n\n")
         (insert (format "Track: %s\n" exercism--current-track))
         (insert (format "Exercises: %d" (length filtered)))
         (when only-unsolved-p
@@ -973,7 +974,6 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
 (transient-define-prefix exercism ()
   "Bring up the Exercism action menu."
   [:description exercism--transient-name
-   ("?" "Self-check configuration" exercism-self-check)
    ("c" "Configure" exercism-configure)
    ("l" "List exercises (with status)" exercism-list-exercises)
    ("u" "List unsolved exercises" exercism-list-unsolved-exercises)
