@@ -189,7 +189,7 @@ directory, adopt it as the current track."
 (defun exercism--ensure-current-track ()
   "Signal an error unless `exercism--current-track' is set."
   (unless exercism--current-track
-    (user-error "Set a track first (`t' in the exercise list, or `M-x exercism-set-track')")))
+    (user-error "Set a track first (`t' in the exercise list, or `M-x exercism-exercise-list-set-track')")))
 
 (defun exercism--get-api-token ()
   "Return the configured Exercism API token, or signal an error."
@@ -469,7 +469,24 @@ Optional FRAME cycles animation when STATE is `submitting'."
   (interactive)
   (unless (derived-mode-p 'exercism-exercise-list-mode)
     (user-error "Not in Exercism exercise list buffer"))
-  (exercism-set-track #'exercism-exercise-list-reload))
+  (exercism--list-tracks
+   (lambda (tracks)
+     (exercism--sync-workspace-from-config)
+     (let* ((track (completing-read "Choose track: " tracks nil t))
+            (track-dir (expand-file-name track exercism--workspace)))
+       (if (file-exists-p track-dir)
+           (progn
+             (setq exercism--current-track track)
+             (exercism--save-state)
+             (message "[exercism] set current track to: %s" track)
+             (exercism-exercise-list-reload))
+         (exercism--track-init
+          track
+          (lambda (_result)
+            (setq exercism--current-track track)
+            (exercism--save-state)
+            (message "[exercism] set current track to: %s" track)
+            (exercism-exercise-list-reload))))))))
 
 (define-derived-mode exercism-exercise-list-mode special-mode "Exercism Exercises"
   "Major mode for browsing Exercism exercises."
@@ -694,29 +711,6 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
                                          (user-error "%s" (string-trim result)))
                                        (funcall callback result))))))
 
-(defun exercism-set-track (&optional after)
-  "Set the current Exercism track.
-Optional AFTER is called with no arguments after the track is set."
-  (interactive)
-  (exercism--list-tracks
-   (lambda (tracks)
-     (exercism--sync-workspace-from-config)
-     (let* ((track (completing-read "Choose track: " tracks nil t))
-            (track-dir (expand-file-name track exercism--workspace)))
-       (if (file-exists-p track-dir)
-           (progn
-             (setq exercism--current-track track)
-             (exercism--save-state)
-             (message "[exercism] set current track to: %s" track)
-             (when after (funcall after)))
-         (exercism--track-init
-          track
-          (lambda (_result)
-            (setq exercism--current-track track)
-            (exercism--save-state)
-            (message "[exercism] set current track to: %s" track)
-            (when after (funcall after)))))))))
-
 (defun exercism--json-value (value)
   "Return a string representation of JSON VALUE."
   (cond ((stringp value) value)
@@ -748,7 +742,7 @@ Optional AFTER is called with no arguments after the track is set."
   "Download all unlocked exercises for the current track."
   (interactive)
   (unless exercism--current-track
-    (user-error "Set a track first (`t' in the exercise list, or `M-x exercism-set-track')"))
+    (user-error "Set a track first (`t' in the exercise list, or `M-x exercism-exercise-list-set-track')"))
   (exercism--list-exercises
    exercism--current-track t
    (lambda (track-exercises)
