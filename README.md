@@ -12,7 +12,6 @@ Download the `exercism` CLI by following [the official guide](https://exercism.o
 
 - Emacs 29.1+
 - [request](https://github.com/tkf/emacs-request)
-- [transient](https://github.com/magit/transient)
 
 ## Quick Start
 
@@ -24,14 +23,11 @@ Download the `exercism` CLI by following [the official guide](https://exercism.o
 (use-package exercism
   :ensure nil
   :load-path "~/projects/mine/exercism.el"
-  :commands (exercism exercism-configure exercism-self-check
-                      exercism-list-exercises exercism-list-unsolved-exercises)
+  :commands (exercism exercism-configure exercism-self-check)
   :bind (("C-c x" . exercism)))
 ```
 
-Invoke `M-x exercism` or `C-c x` to open the transient menu.
-
-<img src="./demos/menu.png" width=300 />
+Invoke `M-x exercism` or `C-c x` to open the exercise list for the current track.
 
 ## Configure
 
@@ -57,24 +53,25 @@ Choose the track you want to work on. The first run may take a few minutes while
 
 ## List Exercises
 
-- `l` — list all exercises with solved/unsolved status
-- `u` — list unsolved exercises only
+`M-x exercism` or `C-c x` opens the exercise list with solved/unsolved status for every exercise on the current track.
 
 The exercise list buffer supports:
 
 - `RET` — open exercise (downloads if needed)
+- `u` — toggle unsolved-only filter
 - `s` — submit exercise
 - `n` / `p` — move between exercises
 - `g` — reload list
+- `d` — download all unlocked exercises
 - `q` — quit
 
 ## Open an Exercise
 
-Open exercises from the list buffer, or use `e` to open a previously downloaded exercise offline.
+Open exercises from the list buffer.
 
 ## Download All Unlocked Exercises
 
-Use `d` in the transient menu to download all unlocked exercises for the current track.
+Use `d` in the exercise list buffer to download all unlocked exercises for the current track.
 
 ## Run Tests
 

@@ -28,7 +28,6 @@
 
 (exercism-ert-bootstrap--require 'ert)
 (exercism-ert-bootstrap--require 'request)
-(exercism-ert-bootstrap--require 'transient)
 (exercism-ert-bootstrap--require 'exercism)
 (exercism-ert-bootstrap--require 'exercism-ert)
 

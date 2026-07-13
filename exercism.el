@@ -9,19 +9,18 @@
 ;; Version: 1.0.0
 ;; Keywords: exercism, convenience
 ;; Homepage: https://github.com/pwojnowski/exercism.el
-;; Package-Requires: ((emacs "29.1") (request "0.3.2") (transient "0.3.7"))
+;; Package-Requires: ((emacs "29.1") (request "0.3.2"))
 
 ;;; Commentary:
 
 ;; Do Exercism exercises within Emacs via the `exercism' CLI.
-;; Entry point: `M-x exercism' or `C-c x' (transient menu).
+;; Entry point: `M-x exercism' or `C-c x' (exercise list).
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'json)
 (require 'request)
-(require 'transient)
 
 (defgroup exercism nil
   "Exercism.org CLI integration."
@@ -328,6 +327,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
     (define-key map (kbd "n") #'exercism-exercise-list-next)
     (define-key map (kbd "p") #'exercism-exercise-list-previous)
     (define-key map (kbd "g") #'exercism-exercise-list-reload)
+    (define-key map (kbd "u") #'exercism-exercise-list-toggle-unsolved-only)
     (define-key map (kbd "d") #'exercism-download-all-unlocked-exercises)
     (define-key map (kbd "t") #'exercism-exercise-list-set-track)
     (define-key map (kbd "c") #'exercism-configure)
@@ -340,8 +340,14 @@ Optional FRAME cycles animation when STATE is `submitting'."
     map)
   "Keymap for `exercism-exercise-list-mode'.")
 
-(defvar-local exercism-exercise-list-title nil
-  "Title used when reloading the current exercise list buffer.")
+(defconst exercism-exercise-list-title "Exercism Exercises"
+  "Title shown in the exercise list buffer.")
+
+(defvar-local exercism-exercise-list-exercises nil
+  "Cached exercise plists for the current exercise list buffer.")
+
+(defvar-local exercism-exercise-list-solution-status-by-slug nil
+  "Cached slug->status hash table for the current exercise list buffer.")
 
 (defvar-local exercism-exercise-list-only-unsolved-p nil
   "When non-nil, the current exercise list shows unsolved exercises only.")
@@ -473,14 +479,24 @@ Optional FRAME cycles animation when STATE is `submitting'."
   (interactive)
   (unless (derived-mode-p 'exercism-exercise-list-mode)
     (user-error "Not in Exercism exercise list buffer"))
-  (let ((title exercism-exercise-list-title)
-        (only-unsolved-p exercism-exercise-list-only-unsolved-p))
+  (let ((only-unsolved-p exercism-exercise-list-only-unsolved-p))
     (exercism--submit-animation-stop)
     (clrhash exercism--exercise-pending-states)
     (exercism--with-track-exercises-and-solutions
      (lambda (exercises solution-status-by-slug)
        (exercism--show-exercise-list
-        title exercises solution-status-by-slug only-unsolved-p)))))
+        exercises solution-status-by-slug only-unsolved-p)))))
+
+(defun exercism-exercise-list-toggle-unsolved-only ()
+  "Toggle showing only unsolved exercises in the current list buffer."
+  (interactive)
+  (unless (derived-mode-p 'exercism-exercise-list-mode)
+    (user-error "Not in Exercism exercise list buffer"))
+  (unless exercism-exercise-list-exercises
+    (user-error "No cached exercise data; use g to reload"))
+  (setq exercism-exercise-list-only-unsolved-p
+        (not exercism-exercise-list-only-unsolved-p))
+  (exercism--render-exercise-list))
 
 (defun exercism-exercise-list-set-track ()
   "Set the current Exercism track and reload the exercise list."
@@ -519,82 +535,101 @@ Optional FRAME cycles animation when STATE is `submitting'."
                             (exercism--plist-get exercise property))))
                  exercises)))
 
-(defun exercism--show-exercise-list (title exercises solution-status-by-slug only-unsolved-p)
-  "Show TITLE and EXERCISES with statuses from SOLUTION-STATUS-BY-SLUG.
-When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
-  (let* ((filtered
-          (if only-unsolved-p
-              (seq-filter
-               (lambda (exercise)
-                 (let* ((slug (exercism--json-value (exercism--plist-get exercise 'slug)))
-                        (solution-status (gethash slug solution-status-by-slug)))
-                   (not (exercism--exercise-list-solved-p solution-status))))
-               exercises)
-            exercises))
+(defun exercism--exercise-list-counts (exercises solution-status-by-slug)
+  "Return (SOLVED-COUNT UNSOLVED-COUNT) for all EXERCISES."
+  (let ((solved-count
+         (seq-count
+          (lambda (exercise)
+            (let ((slug (exercism--json-value
+                         (exercism--plist-get exercise 'slug))))
+              (exercism--exercise-list-solved-p
+               (gethash slug solution-status-by-slug))))
+          exercises)))
+    (list solved-count (- (length exercises) solved-count))))
+
+(defun exercism--filter-exercises (exercises solution-status-by-slug only-unsolved-p)
+  "Return EXERCISES filtered by ONLY-UNSOLVED-P and SOLUTION-STATUS-BY-SLUG."
+  (if only-unsolved-p
+      (seq-filter
+       (lambda (exercise)
+         (let* ((slug (exercism--json-value (exercism--plist-get exercise 'slug)))
+                (solution-status (gethash slug solution-status-by-slug)))
+           (not (exercism--exercise-list-solved-p solution-status))))
+       exercises)
+    exercises))
+
+(defun exercism--render-exercise-list ()
+  "Redraw the exercise list buffer from cached data."
+  (let* ((exercises exercism-exercise-list-exercises)
+         (solution-status-by-slug exercism-exercise-list-solution-status-by-slug)
+         (only-unsolved-p exercism-exercise-list-only-unsolved-p)
+         (filtered (exercism--filter-exercises
+                    exercises solution-status-by-slug only-unsolved-p))
          (state-width 11)
          (difficulty-width (exercism--exercise-list-longest filtered 'difficulty))
          (slug-width (exercism--exercise-list-longest filtered 'slug))
-         (solved-count (seq-count
-                        (lambda (exercise)
-                          (let ((slug (exercism--json-value
-                                       (exercism--plist-get exercise 'slug))))
-                            (exercism--exercise-list-solved-p
-                             (gethash slug solution-status-by-slug))))
-                        filtered))
-         (unsolved-count (- (length filtered) solved-count)))
-    (with-current-buffer (get-buffer-create exercism--exercise-list-buffer-name)
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert title "\n")
-        (insert (make-string (length title) ?=) "\n\n")
-        (insert "RET open | b browser | s submit | S submit+browser | r test | d download all | n/p move | g reload | t track | c configure | ? self-check | q quit\n\n")
-        (insert (format "Track: %s\n" exercism--current-track))
-        (insert (format "Exercises: %d" (length filtered)))
-        (when only-unsolved-p
-          (insert " (unsolved only)"))
-        (insert (format " | Solved: %d | Unsolved: %d\n\n"
-                        (if only-unsolved-p 0 solved-count)
-                        (if only-unsolved-p (length filtered) unsolved-count)))
-        (insert (format (format "%%-%ds  %%-%ds  %%-%ds  %%s\n"
-                                state-width difficulty-width slug-width)
-                        "Status" "Difficulty" "Exercise" "Blurb"))
-        (insert (make-string (+ state-width difficulty-width slug-width 8) ?-) "\n")
-        (seq-doseq (exercise filtered)
-          (let* ((slug (exercism--json-value (exercism--plist-get exercise 'slug)))
-                 (difficulty (exercism--json-value (exercism--plist-get exercise 'difficulty)))
-                 (blurb (exercism--plist-get exercise 'blurb))
-                 (solution-status (gethash slug solution-status-by-slug))
-                 (state (exercism--exercise-list-state exercise solution-status))
-                 (unlocked-p (exercism--plist-get exercise 'is_unlocked))
-                 (line-start (point))
-                 (difficulty-face (pcase difficulty
-                                    ("easy" '(:foreground "green"))
-                                    ("medium" '(:foreground "yellow"))
-                                    ("hard" '(:foreground "red"))
-                                    (_ '(:foreground "blue")))))
-            (insert (format (format "%%-%ds  " state-width)
-                            (exercism--exercise-list-state-label state))
-                    (propertize (format (format "%%-%ds" difficulty-width) difficulty)
-                                'face difficulty-face)
-                    "  "
-                    (format (format "%%-%ds" slug-width) slug)
-                    "  "
-                    (propertize blurb 'face 'shadow)
-                    "\n")
-            (add-text-properties line-start (point)
-                                 `(exercism-exercise-slug ,slug
-                                   exercism-exercise-unlocked ,unlocked-p))))
-        (exercism-exercise-list-mode)
-        (setq exercism-exercise-list-title title
-              exercism-exercise-list-only-unsolved-p only-unsolved-p
-              exercism-exercise-list-state-width state-width)
-        (goto-char (point-min))
-        (catch 'found
-          (while (not (eobp))
-            (when (get-text-property (point) 'exercism-exercise-slug)
-              (throw 'found t))
-            (forward-line 1)))
-        (pop-to-buffer (current-buffer))))))
+         (counts (exercism--exercise-list-counts exercises solution-status-by-slug))
+         (solved-count (car counts))
+         (unsolved-count (cadr counts))
+         (title exercism-exercise-list-title))
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert title "\n")
+      (insert (make-string (length title) ?=) "\n\n")
+      (insert "RET open | b browser | s submit | S submit+browser | r test | d download all | u toggle unsolved | n/p move | g reload | t track | c configure | ? self-check | q quit\n\n")
+      (insert (format "Track: %s\n" exercism--current-track))
+      (insert (format "Exercises: %d" (length filtered)))
+      (when only-unsolved-p
+        (insert " (unsolved only)"))
+      (insert (format " | Solved: %d | Unsolved: %d\n\n"
+                      solved-count unsolved-count))
+      (insert (format (format "%%-%ds  %%-%ds  %%-%ds  %%s\n"
+                              state-width difficulty-width slug-width)
+                      "Status" "Difficulty" "Exercise" "Blurb"))
+      (insert (make-string (+ state-width difficulty-width slug-width 8) ?-) "\n")
+      (seq-doseq (exercise filtered)
+        (let* ((slug (exercism--json-value (exercism--plist-get exercise 'slug)))
+               (difficulty (exercism--json-value (exercism--plist-get exercise 'difficulty)))
+               (blurb (exercism--plist-get exercise 'blurb))
+               (solution-status (gethash slug solution-status-by-slug))
+               (state (exercism--exercise-list-state exercise solution-status))
+               (unlocked-p (exercism--plist-get exercise 'is_unlocked))
+               (line-start (point))
+               (difficulty-face (pcase difficulty
+                                  ("easy" '(:foreground "green"))
+                                  ("medium" '(:foreground "yellow"))
+                                  ("hard" '(:foreground "red"))
+                                  (_ '(:foreground "blue")))))
+          (insert (format (format "%%-%ds  " state-width)
+                          (exercism--exercise-list-state-label state))
+                  (propertize (format (format "%%-%ds" difficulty-width) difficulty)
+                              'face difficulty-face)
+                  "  "
+                  (format (format "%%-%ds" slug-width) slug)
+                  "  "
+                  (propertize blurb 'face 'shadow)
+                  "\n")
+          (add-text-properties line-start (point)
+                               `(exercism-exercise-slug ,slug
+                                 exercism-exercise-unlocked ,unlocked-p))))
+      (setq exercism-exercise-list-state-width state-width)
+      (goto-char (point-min))
+      (catch 'found
+        (while (not (eobp))
+          (when (get-text-property (point) 'exercism-exercise-slug)
+            (throw 'found t))
+          (forward-line 1))))))
+
+(defun exercism--show-exercise-list (exercises solution-status-by-slug only-unsolved-p)
+  "Cache EXERCISES and SOLUTION-STATUS-BY-SLUG, then render the list.
+When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
+  (with-current-buffer (get-buffer-create exercism--exercise-list-buffer-name)
+    (exercism-exercise-list-mode)
+    (setq exercism-exercise-list-exercises exercises
+          exercism-exercise-list-solution-status-by-slug solution-status-by-slug
+          exercism-exercise-list-only-unsolved-p only-unsolved-p)
+    (exercism--render-exercise-list)
+    (pop-to-buffer (current-buffer))))
 
 (defun exercism--with-track-exercises-and-solutions (callback)
   "Fetch all exercises and solution statuses, then call CALLBACK."
@@ -607,23 +642,12 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
       (lambda (solution-status-by-slug)
         (funcall callback exercises solution-status-by-slug))))))
 
-(defun exercism-list-exercises ()
-  "List all exercises on the current track with solved/unsolved status."
+(defun exercism ()
+  "Open the Exercism exercise list for the current track."
   (interactive)
   (exercism--with-track-exercises-and-solutions
    (lambda (exercises solution-status-by-slug)
-     (exercism--show-exercise-list
-      "Exercism Exercises"
-      exercises solution-status-by-slug nil))))
-
-(defun exercism-list-unsolved-exercises ()
-  "List unsolved exercises on the current track."
-  (interactive)
-  (exercism--with-track-exercises-and-solutions
-   (lambda (exercises solution-status-by-slug)
-     (exercism--show-exercise-list
-      "Exercism Unsolved Exercises"
-      exercises solution-status-by-slug t))))
+     (exercism--show-exercise-list exercises solution-status-by-slug nil))))
 
 (defun exercism--get-config (exercise-dir)
   "Return the parsed config alist for EXERCISE-DIR."
@@ -773,12 +797,6 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
                       exercism--current-track slug)
              (exercism--download-exercise slug exercism--current-track
                                           (lambda (_result) nil)))))))))
-
-(defun exercism--transient-name ()
-  "Return the transient prefix title showing current track and exercise."
-  (format "Exercism actions | TRACK: %s | EXERCISE: %s"
-          (or exercism--current-track "N/A")
-          (or exercism--current-exercise "N/A")))
 
 (defun exercism--semver-to-number (semver)
   "Convert SEMVER (e.g. \"3.26.1\") to a comparable integer."
@@ -999,12 +1017,6 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
     (unless unlocked-p
       (user-error "Exercise %s is locked" slug))
     (exercism--run-tests-for-slug slug)))
-
-(transient-define-prefix exercism ()
-  "Bring up the Exercism action menu."
-  [:description exercism--transient-name
-   ("l" "List exercises (with status)" exercism-list-exercises)
-   ("u" "List unsolved exercises" exercism-list-unsolved-exercises)])
 
 (exercism--load-state)
 (exercism--reconcile-state-with-config)
