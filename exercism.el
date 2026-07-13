@@ -328,6 +328,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
     (define-key map (kbd "n") #'exercism-exercise-list-next)
     (define-key map (kbd "p") #'exercism-exercise-list-previous)
     (define-key map (kbd "g") #'exercism-exercise-list-reload)
+    (define-key map (kbd "d") #'exercism-download-all-unlocked-exercises)
     (define-key map (kbd "t") #'exercism-exercise-list-set-track)
     (define-key map (kbd "s") #'exercism-exercise-list-submit-exercise)
     (define-key map (kbd "b") #'exercism-exercise-list-open-in-browser)
@@ -529,7 +530,7 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
         (erase-buffer)
         (insert title "\n")
         (insert (make-string (length title) ?=) "\n\n")
-        (insert "RET open | b browser | s submit | n/p move | g reload | q quit\n\n")
+        (insert "RET open | b browser | s submit | d download all | n/p move | g reload | t track | q quit\n\n")
         (insert (format "Track: %s\n" exercism--current-track))
         (insert (format "Exercises: %d" (length filtered)))
         (when only-unsolved-p
@@ -960,7 +961,6 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
   [:description exercism--transient-name
    ("?" "Self-check configuration" exercism-self-check)
    ("c" "Configure" exercism-configure)
-   ("d" "Download all unlocked exercises" exercism-download-all-unlocked-exercises)
    ("l" "List exercises (with status)" exercism-list-exercises)
    ("u" "List unsolved exercises" exercism-list-unsolved-exercises)
    ("r" "Run tests" exercism-run-tests)
