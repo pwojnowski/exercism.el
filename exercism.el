@@ -736,32 +736,6 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
              (exercism--download-exercise slug exercism--current-track
                                           (lambda (_result) nil)))))))))
 
-(defun exercism--list-downloaded-exercises ()
-  "Return downloaded exercise directory names for the current track."
-  (let ((track-dir (expand-file-name exercism--current-track exercism--workspace)))
-    (seq-filter (lambda (file)
-                  (not (member file '("." ".."))))
-                (directory-files track-dir))))
-
-(defun exercism-open-exercise-offline ()
-  "Open a downloaded exercise from the current track."
-  (interactive)
-  (unless exercism--current-track
-    (user-error "Set a track first (`t' in the exercism menu, or `M-x exercism-set-track')"))
-  (let* ((track-dir (expand-file-name exercism--current-track exercism--workspace))
-         (downloaded-exercise-slugs (exercism--list-downloaded-exercises))
-         (exercise (string-trim
-                    (completing-read
-                     (format "[exercism]: (%s) Choose a downloaded exercise: "
-                             exercism--current-track)
-                     downloaded-exercise-slugs
-                     (lambda (_candidate) t)
-                     t)))
-         (exercise-dir (expand-file-name exercise track-dir)))
-    (exercism--open-exercise-dir exercise-dir)
-    (setq exercism--current-exercise exercise)
-    (exercism--save-state)))
-
 (defun exercism--transient-name ()
   "Return the transient prefix title showing current track and exercise."
   (format "Exercism actions | TRACK: %s | EXERCISE: %s"
@@ -978,7 +952,6 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
    ("d" "Download all unlocked exercises" exercism-download-all-unlocked-exercises)
    ("l" "List exercises (with status)" exercism-list-exercises)
    ("u" "List unsolved exercises" exercism-list-unsolved-exercises)
-   ("e" "Open a downloaded exercise" exercism-open-exercise-offline)
    ("r" "Run tests" exercism-run-tests)
    ("s" "Submit" exercism-submit)
    ("S" "Submit (then open in browser)" exercism-submit-then-open-in-browser)])
