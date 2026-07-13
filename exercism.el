@@ -484,13 +484,16 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
   (let ((config (exercism--get-config exercise-dir)))
     (alist-get 'solution (alist-get 'files config))))
 
-(defun exercism--primary-solution-file (exercise-dir)
-  "Return the primary solution file path for EXERCISE-DIR, or nil."
+(defun exercism--solution-file-paths (exercise-dir)
+  "Return absolute solution file paths for EXERCISE-DIR."
   (let ((solution-files (exercism--get-solution-files exercise-dir)))
     (when solution-files
-      (expand-file-name
-       (if (listp solution-files) (car solution-files) solution-files)
-       exercise-dir))))
+      (let ((files (if (listp solution-files) solution-files (list solution-files))))
+        (mapcar (lambda (file) (expand-file-name file exercise-dir)) files)))))
+
+(defun exercism--primary-solution-file (exercise-dir)
+  "Return the primary solution file path for EXERCISE-DIR, or nil."
+  (car (exercism--solution-file-paths exercise-dir)))
 
 (defun exercism--open-exercise-dir (exercise-dir)
   "Visit EXERCISE-DIR by opening its primary solution file."
@@ -506,12 +509,12 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
          (exercise-dir (expand-file-name slug track-dir)))
     (unless (file-directory-p exercise-dir)
       (user-error "Exercise %s is not downloaded" slug))
-    (let* ((solution-files (exercism--get-solution-files exercise-dir))
+    (let* ((solution-files (exercism--solution-file-paths exercise-dir))
            (default-directory exercise-dir)
            (submit-command (string-join
                             (cons (concat (shell-quote-argument exercism-executable)
                                           " submit")
-                                  solution-files)
+                                  (mapcar #'shell-quote-argument solution-files))
                             " ")))
       (unless solution-files
         (user-error "No solution file found in %s" exercise-dir))

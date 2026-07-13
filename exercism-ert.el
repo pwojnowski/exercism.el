@@ -87,9 +87,16 @@
 
 (defvar exercism-ert--submit-slug nil)
 
+(defvar exercism-ert--submit-command nil)
+
 (defun exercism-ert--submit-slug-recorder (orig slug &rest _args)
   "Advice that records the slug passed to `exercism--submit-slug'."
   (setq exercism-ert--submit-slug slug))
+
+(defun exercism-ert--run-shell-command-recorder (orig shell-cmd &rest args)
+  "Advice that records SHELL-CMD passed to `exercism--run-shell-command'."
+  (setq exercism-ert--submit-command shell-cmd)
+  (apply orig shell-cmd args))
 
 (defun exercism-ert--write-minimal-exercise (exercise-dir &optional solution-file)
   "Create a minimal Exercism exercise tree in EXERCISE-DIR."
@@ -457,6 +464,40 @@
                            (exercism--primary-solution-file exercise-dir))))
       (when (file-exists-p exercise-dir)
         (delete-directory exercise-dir t)))))
+
+(ert-deftest exercism--solution-file-paths ()
+  (let* ((exercise-dir (make-temp-file "exercism-exercise" 'dir))
+         (solution-file (expand-file-name "hello.el" exercise-dir)))
+    (unwind-protect
+        (progn
+          (exercism-ert--write-minimal-exercise exercise-dir "hello.el")
+          (should (equal (list solution-file)
+                         (exercism--solution-file-paths exercise-dir))))
+      (when (file-exists-p exercise-dir)
+        (delete-directory exercise-dir t)))))
+
+(ert-deftest exercism--submit-slug-uses-absolute-paths ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "go")
+         (slug "reverse-string")
+         (track-dir (expand-file-name track workspace))
+         (exercise-dir (expand-file-name slug track-dir))
+         (solution-file (expand-file-name "reverse_string.go" exercise-dir)))
+    (unwind-protect
+        (progn
+          (exercism-ert--write-minimal-exercise exercise-dir "reverse_string.go")
+          (setq exercism--current-track track
+                exercism--workspace workspace
+                exercism-ert--submit-command nil)
+          (advice-add #'exercism--run-shell-command :around
+                      #'exercism-ert--run-shell-command-recorder)
+          (exercism--submit-slug slug)
+          (should (string-match-p (regexp-quote solution-file)
+                                  exercism-ert--submit-command))
+          (should (not (string-match-p " submit reverse_string.go" exercism-ert--submit-command))))
+      (advice-remove #'exercism--run-shell-command #'exercism-ert--run-shell-command-recorder)
+      (when (file-exists-p workspace)
+        (delete-directory workspace t)))))
 
 (ert-deftest exercism--open-exercise-slug-existing-dir ()
   (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
