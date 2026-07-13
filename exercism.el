@@ -189,7 +189,7 @@ directory, adopt it as the current track."
 (defun exercism--ensure-current-track ()
   "Signal an error unless `exercism--current-track' is set."
   (unless exercism--current-track
-    (user-error "Set a track first (`t' in the exercism menu, or `M-x exercism-set-track')")))
+    (user-error "Set a track first (`t' in the exercise list, or `M-x exercism-set-track')")))
 
 (defun exercism--get-api-token ()
   "Return the configured Exercism API token, or signal an error."
@@ -328,6 +328,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
     (define-key map (kbd "n") #'exercism-exercise-list-next)
     (define-key map (kbd "p") #'exercism-exercise-list-previous)
     (define-key map (kbd "g") #'exercism-exercise-list-reload)
+    (define-key map (kbd "t") #'exercism-exercise-list-set-track)
     (define-key map (kbd "s") #'exercism-exercise-list-submit-exercise)
     (define-key map (kbd "b") #'exercism-exercise-list-open-in-browser)
     (define-key map (kbd "q") #'quit-window)
@@ -462,6 +463,13 @@ Optional FRAME cycles animation when STATE is `submitting'."
      (lambda (exercises solution-status-by-slug)
        (exercism--show-exercise-list
         title exercises solution-status-by-slug only-unsolved-p)))))
+
+(defun exercism-exercise-list-set-track ()
+  "Set the current Exercism track and reload the exercise list."
+  (interactive)
+  (unless (derived-mode-p 'exercism-exercise-list-mode)
+    (user-error "Not in Exercism exercise list buffer"))
+  (exercism-set-track #'exercism-exercise-list-reload))
 
 (define-derived-mode exercism-exercise-list-mode special-mode "Exercism Exercises"
   "Major mode for browsing Exercism exercises."
@@ -686,8 +694,9 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
                                          (user-error "%s" (string-trim result)))
                                        (funcall callback result))))))
 
-(defun exercism-set-track ()
-  "Set the current Exercism track."
+(defun exercism-set-track (&optional after)
+  "Set the current Exercism track.
+Optional AFTER is called with no arguments after the track is set."
   (interactive)
   (exercism--list-tracks
    (lambda (tracks)
@@ -698,13 +707,15 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
            (progn
              (setq exercism--current-track track)
              (exercism--save-state)
-             (message "[exercism] set current track to: %s" track))
+             (message "[exercism] set current track to: %s" track)
+             (when after (funcall after)))
          (exercism--track-init
           track
           (lambda (_result)
             (setq exercism--current-track track)
             (exercism--save-state)
-            (message "[exercism] set current track to: %s" track))))))))
+            (message "[exercism] set current track to: %s" track)
+            (when after (funcall after)))))))))
 
 (defun exercism--json-value (value)
   "Return a string representation of JSON VALUE."
@@ -737,7 +748,7 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
   "Download all unlocked exercises for the current track."
   (interactive)
   (unless exercism--current-track
-    (user-error "Set a track first (`t' in the exercism menu, or `M-x exercism-set-track')"))
+    (user-error "Set a track first (`t' in the exercise list, or `M-x exercism-set-track')"))
   (exercism--list-exercises
    exercism--current-track t
    (lambda (track-exercises)
@@ -955,7 +966,6 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
   [:description exercism--transient-name
    ("?" "Self-check configuration" exercism-self-check)
    ("c" "Configure" exercism-configure)
-   ("t" "Set current track" exercism-set-track)
    ("d" "Download all unlocked exercises" exercism-download-all-unlocked-exercises)
    ("l" "List exercises (with status)" exercism-list-exercises)
    ("u" "List unsolved exercises" exercism-list-unsolved-exercises)

@@ -458,6 +458,10 @@
   (should (eq #'exercism-exercise-list-reload
               (lookup-key exercism-exercise-list-mode-map "g"))))
 
+(ert-deftest exercism-exercise-list-set-track-key ()
+  (should (eq #'exercism-exercise-list-set-track
+              (lookup-key exercism-exercise-list-mode-map "t"))))
+
 (ert-deftest exercism--exercise-url ()
   (should (equal "https://exercism.org/tracks/emacs-lisp/exercises/two-fer"
                  (exercism--exercise-url "emacs-lisp" "two-fer"))))
