@@ -331,6 +331,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
     (define-key map (kbd "d") #'exercism-download-all-unlocked-exercises)
     (define-key map (kbd "t") #'exercism-exercise-list-set-track)
     (define-key map (kbd "s") #'exercism-exercise-list-submit-exercise)
+    (define-key map (kbd "S") #'exercism-exercise-list-submit-then-open-in-browser)
     (define-key map (kbd "b") #'exercism-exercise-list-open-in-browser)
     (define-key map (kbd "q") #'quit-window)
     map)
@@ -437,6 +438,19 @@ Optional FRAME cycles animation when STATE is `submitting'."
                             slug exercism--current-track))
       (exercism--submit-slug slug))))
 
+(defun exercism-exercise-list-submit-then-open-in-browser ()
+  "Submit the exercise on the current line, then open it in a browser."
+  (interactive)
+  (let ((slug (exercism-exercise-list--slug-at-point))
+        (unlocked-p (get-text-property (point) 'exercism-exercise-unlocked)))
+    (unless slug
+      (user-error "Not on an exercise row"))
+    (unless unlocked-p
+      (user-error "Exercise %s is locked" slug))
+    (when (y-or-n-p (format "Submit exercise %s on track %s and open in browser? "
+                            slug exercism--current-track))
+      (exercism--submit-slug slug t))))
+
 (defun exercism--exercise-url (track-slug exercise-slug)
   "Return the Exercism.org URL for EXERCISE-SLUG on TRACK-SLUG."
   (format "https://exercism.org/tracks/%s/exercises/%s"
@@ -530,7 +544,7 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
         (erase-buffer)
         (insert title "\n")
         (insert (make-string (length title) ?=) "\n\n")
-        (insert "RET open | b browser | s submit | d download all | n/p move | g reload | t track | q quit\n\n")
+        (insert "RET open | b browser | s submit | S submit+browser | d download all | n/p move | g reload | t track | q quit\n\n")
         (insert (format "Track: %s\n" exercism--current-track))
         (insert (format "Exercises: %d" (length filtered)))
         (when only-unsolved-p
@@ -964,8 +978,7 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
    ("l" "List exercises (with status)" exercism-list-exercises)
    ("u" "List unsolved exercises" exercism-list-unsolved-exercises)
    ("r" "Run tests" exercism-run-tests)
-   ("s" "Submit" exercism-submit)
-   ("S" "Submit (then open in browser)" exercism-submit-then-open-in-browser)])
+   ("s" "Submit" exercism-submit)])
 
 (exercism--load-state)
 (exercism--reconcile-state-with-config)
