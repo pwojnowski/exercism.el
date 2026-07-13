@@ -87,6 +87,8 @@ Requires Exercism CLI 3.2.0+ (`M-x exercism-cli-version`).
 - `s` — submit current exercise
 - `S` — submit, then open the submission page in a browser
 
+While a submit is in progress, the exercise list Status column shows `submitting` (animated), then `submitted` or `failed` when the CLI returns. Press `g` in the list to refresh statuses from the API.
+
 Marking an exercise as complete still happens on the Exercism website.
 
 ## Self-Check

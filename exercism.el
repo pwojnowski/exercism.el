@@ -262,6 +262,63 @@ directory, adopt it as the current track."
     ('not-started (propertize "not started" 'face 'shadow))
     ('locked (propertize "locked" 'face 'shadow))))
 
+(defvar exercism--exercise-pending-states
+  (make-hash-table :test 'equal)
+  "Hash table mapping exercise slug to pending submit state.")
+
+(defvar exercism--submit-animation-timer nil
+  "Timer animating submitting rows in the exercise list.")
+
+(defvar exercism--submit-animation-frame 0
+  "Current animation frame for submitting status labels.")
+
+(defun exercism--exercise-list-pending-label (state &optional frame)
+  "Return a propertized label for pending submit STATE.
+Optional FRAME cycles animation when STATE is `submitting'."
+  (pcase state
+    ('submitting
+     (propertize (nth (% (or frame 0) 2) '("submitting " "submitting."))
+                 'face 'warning))
+    ('submitted (propertize "submitted" 'face 'success))
+    ('submit-failed (propertize "failed" 'face 'error))))
+
+(defun exercism--submitting-slugs ()
+  "Return slugs currently in submitting state."
+  (let (slugs)
+    (maphash (lambda (slug state)
+               (when (eq state 'submitting)
+                 (push slug slugs)))
+             exercism--exercise-pending-states)
+    slugs))
+
+(defun exercism--submit-animation-stop ()
+  "Stop the submitting status animation timer."
+  (when exercism--submit-animation-timer
+    (cancel-timer exercism--submit-animation-timer)
+    (setq exercism--submit-animation-timer nil)))
+
+(defun exercism--submit-animation-update ()
+  "Refresh submitting rows in the exercise list buffer."
+  (setq exercism--submit-animation-frame (1+ exercism--submit-animation-frame))
+  (dolist (slug (exercism--submitting-slugs))
+    (exercism-exercise-list--set-pending-status slug 'submitting))
+  (when (null (exercism--submitting-slugs))
+    (exercism--submit-animation-stop)))
+
+(defun exercism--submit-animation-start ()
+  "Start the submitting status animation timer if needed."
+  (unless exercism--submit-animation-timer
+    (setq exercism--submit-animation-frame 0)
+    (setq exercism--submit-animation-timer
+          (run-with-timer 0.5 0.5 #'exercism--submit-animation-update))))
+
+(defun exercism--submit-pending-set (slug state)
+  "Record pending submit STATE for SLUG and update the exercise list row."
+  (puthash slug state exercism--exercise-pending-states)
+  (exercism-exercise-list--set-pending-status slug state)
+  (when (eq state 'submitting)
+    (exercism--submit-animation-start)))
+
 (defvar exercism--exercise-list-buffer-name "*Exercism Exercises*"
   "Buffer name for exercise listings.")
 
@@ -281,6 +338,42 @@ directory, adopt it as the current track."
 
 (defvar-local exercism-exercise-list-only-unsolved-p nil
   "When non-nil, the current exercise list shows unsolved exercises only.")
+
+(defvar-local exercism-exercise-list-state-width 11
+  "Width of the Status column in the exercise list buffer.")
+
+(defun exercism-exercise-list--line-for-slug (slug)
+  "Return (START . END) for the exercise row of SLUG, or nil."
+  (when (and slug (get-buffer exercism--exercise-list-buffer-name))
+    (with-current-buffer exercism--exercise-list-buffer-name
+      (when (derived-mode-p 'exercism-exercise-list-mode)
+        (save-excursion
+          (goto-char (point-min))
+          (catch 'found
+            (while (not (eobp))
+              (when (equal slug (get-text-property (point) 'exercism-exercise-slug))
+                (throw 'found (cons (line-beginning-position)
+                                    (line-end-position))))
+              (forward-line 1))
+            nil))))))
+
+(defun exercism-exercise-list--set-pending-status (slug state)
+  "Update the Status column for SLUG to pending submit STATE."
+  (when-let ((bounds (exercism-exercise-list--line-for-slug slug)))
+    (with-current-buffer exercism--exercise-list-buffer-name
+      (let ((inhibit-read-only t)
+            (width exercism-exercise-list-state-width)
+            (unlocked-p (get-text-property (car bounds) 'exercism-exercise-unlocked))
+            (label (if (eq state 'submitting)
+                       (exercism--exercise-list-pending-label
+                        state exercism--submit-animation-frame)
+                     (exercism--exercise-list-pending-label state))))
+        (delete-region (car bounds) (+ (car bounds) width))
+        (goto-char (car bounds))
+        (insert (format (format "%%-%ds" width) label))
+        (add-text-properties (line-beginning-position) (line-end-position)
+                               `(exercism-exercise-slug ,slug
+                                 exercism-exercise-unlocked ,unlocked-p))))))
 
 (defun exercism-exercise-list--exercise-line-p ()
   "Return non-nil when point is on an exercise row."
@@ -348,6 +441,8 @@ directory, adopt it as the current track."
     (user-error "Not in Exercism exercise list buffer"))
   (let ((title exercism-exercise-list-title)
         (only-unsolved-p exercism-exercise-list-only-unsolved-p))
+    (exercism--submit-animation-stop)
+    (clrhash exercism--exercise-pending-states)
     (exercism--with-track-exercises-and-solutions
      (lambda (exercises solution-status-by-slug)
        (exercism--show-exercise-list
@@ -433,7 +528,8 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
                                    exercism-exercise-unlocked ,unlocked-p))))
         (exercism-exercise-list-mode)
         (setq exercism-exercise-list-title title
-              exercism-exercise-list-only-unsolved-p only-unsolved-p)
+              exercism-exercise-list-only-unsolved-p only-unsolved-p
+              exercism-exercise-list-state-width state-width)
         (goto-char (point-min))
         (catch 'found
           (while (not (eobp))
@@ -502,9 +598,27 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
         (find-file solution-file)
       (user-error "No solution file found in %s" exercise-dir))))
 
+(defun exercism--submit-complete (slug result open-in-browser-after-p)
+  "Finalize submit for SLUG with CLI RESULT."
+  (let ((final-state (if (exercism--cli-error-p result) 'submit-failed 'submitted)))
+    (exercism--submit-pending-set slug final-state)
+    (when (null (exercism--submitting-slugs))
+      (exercism--submit-animation-stop))
+    (if (exercism--cli-error-p result)
+        (message "[exercism] submit failed: %s" (string-trim result))
+      (message "[exercism] submit succeeded: %s" (string-trim result)))
+    (setq exercism--current-exercise slug)
+    (exercism--save-state)
+    (when (and open-in-browser-after-p
+               (string-match "\\(https://exercism\\.org.*\\)" result))
+      (browse-url (match-string 1 result)))))
+
 (defun exercism--submit-slug (slug &optional open-in-browser-after-p)
   "Submit SLUG on `exercism--current-track'."
   (exercism--ensure-current-track)
+  (when (eq (gethash slug exercism--exercise-pending-states) 'submitting)
+    (message "[exercism] already submitting %s" slug)
+    (cl-return-from exercism--submit-slug))
   (let* ((track-dir (expand-file-name exercism--current-track exercism--workspace))
          (exercise-dir (expand-file-name slug track-dir)))
     (unless (file-directory-p exercise-dir)
@@ -518,15 +632,13 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
                             " ")))
       (unless solution-files
         (user-error "No solution file found in %s" exercise-dir))
+      (exercism--submit-pending-set slug 'submitting)
+      (message "[exercism] submitting %s on %s..."
+               slug exercism--current-track)
       (exercism--run-shell-command
        submit-command
        (lambda (result)
-         (message "[exercism] submit: %s" result)
-         (setq exercism--current-exercise slug)
-         (exercism--save-state)
-         (when (and open-in-browser-after-p
-                    (string-match "\\(https://exercism\\.org.*\\)" result))
-           (browse-url (match-string 1 result))))))))
+         (exercism--submit-complete slug result open-in-browser-after-p))))))
 
 (defun exercism--submit (&optional open-in-browser-after-p)
   "Submit the solution in the current exercise directory."

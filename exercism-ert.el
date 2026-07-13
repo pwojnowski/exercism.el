@@ -89,6 +89,8 @@
 
 (defvar exercism-ert--submit-command nil)
 
+(defvar exercism-ert--submit-sync-result "Submitted successfully")
+
 (defun exercism-ert--submit-slug-recorder (orig slug &rest _args)
   "Advice that records the slug passed to `exercism--submit-slug'."
   (setq exercism-ert--submit-slug slug))
@@ -97,6 +99,12 @@
   "Advice that records SHELL-CMD passed to `exercism--run-shell-command'."
   (setq exercism-ert--submit-command shell-cmd)
   (apply orig shell-cmd args))
+
+(defun exercism-ert--run-shell-command-immediate (orig shell-cmd &optional callback)
+  "Advice that invokes CALLBACK synchronously with `exercism-ert--submit-sync-result'."
+  (setq exercism-ert--submit-command shell-cmd)
+  (when callback
+    (funcall callback exercism-ert--submit-sync-result)))
 
 (defun exercism-ert--write-minimal-exercise (exercise-dir &optional solution-file)
   "Create a minimal Exercism exercise tree in EXERCISE-DIR."
@@ -180,6 +188,99 @@
   (should (equal "locked"
                  (exercism-ert--label-text
                   (exercism--exercise-list-state-label 'locked)))))
+
+(ert-deftest exercism--exercise-list-pending-label ()
+  (should (equal "submitting "
+                 (exercism-ert--label-text
+                  (exercism--exercise-list-pending-label 'submitting 0))))
+  (should (equal "submitting."
+                 (exercism-ert--label-text
+                  (exercism--exercise-list-pending-label 'submitting 1))))
+  (should (equal "submitted"
+                 (exercism-ert--label-text
+                  (exercism--exercise-list-pending-label 'submitted))))
+  (should (equal "failed"
+                 (exercism-ert--label-text
+                  (exercism--exercise-list-pending-label 'submit-failed)))))
+
+(ert-deftest exercism-exercise-list--line-for-slug ()
+  (exercism-ert--with-exercise-list
+   (exercism-ert--sample-exercises)
+   (exercism-ert--make-solution-table nil)
+   nil
+   (lambda ()
+     (should (exercism-exercise-list--line-for-slug "two-fer"))
+     (should (null (exercism-exercise-list--line-for-slug "missing-slug"))))))
+
+(ert-deftest exercism--submit-slug-updates-list-status ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "go")
+         (slug "reverse-string")
+         (track-dir (expand-file-name track workspace))
+         (exercise-dir (expand-file-name slug track-dir)))
+    (unwind-protect
+        (progn
+          (exercism-ert--write-minimal-exercise exercise-dir "reverse_string.go")
+          (exercism-ert--with-exercise-list
+           (list `((slug . ,slug)
+                   (difficulty . "easy")
+                   (blurb . "Reverse it")
+                   (is_unlocked . t)))
+           (exercism-ert--make-solution-table nil)
+           nil
+           (lambda ()
+             (setq exercism--current-track track
+                   exercism--workspace workspace
+                   exercism-ert--submit-sync-result "Submitted successfully")
+             (advice-add #'exercism--run-shell-command :around
+                         #'exercism-ert--run-shell-command-immediate)
+             (exercism--submit-slug slug)
+             (let ((line (buffer-substring-no-properties
+                          (car (exercism-exercise-list--line-for-slug slug))
+                          (cdr (exercism-exercise-list--line-for-slug slug)))))
+               (should (string-match-p "submitted" line))
+               (should (eq 'submitted (gethash slug exercism--exercise-pending-states))))
+             (advice-remove #'exercism--run-shell-command
+                            #'exercism-ert--run-shell-command-immediate)))
+      (exercism--submit-animation-stop)
+      (clrhash exercism--exercise-pending-states)
+      (when (file-exists-p workspace)
+        (delete-directory workspace t))))))
+
+(ert-deftest exercism--submit-slug-updates-list-status-on-error ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "go")
+         (slug "reverse-string")
+         (track-dir (expand-file-name track workspace))
+         (exercise-dir (expand-file-name slug track-dir)))
+    (unwind-protect
+        (progn
+          (exercism-ert--write-minimal-exercise exercise-dir "reverse_string.go")
+          (exercism-ert--with-exercise-list
+           (list `((slug . ,slug)
+                   (difficulty . "easy")
+                   (blurb . "Reverse it")
+                   (is_unlocked . t)))
+           (exercism-ert--make-solution-table nil)
+           nil
+           (lambda ()
+             (setq exercism--current-track track
+                   exercism--workspace workspace
+                   exercism-ert--submit-sync-result "Error: submit failed")
+             (advice-add #'exercism--run-shell-command :around
+                         #'exercism-ert--run-shell-command-immediate)
+             (exercism--submit-slug slug)
+             (let ((line (buffer-substring-no-properties
+                          (car (exercism-exercise-list--line-for-slug slug))
+                          (cdr (exercism-exercise-list--line-for-slug slug)))))
+               (should (string-match-p "failed" line))
+               (should (eq 'submit-failed (gethash slug exercism--exercise-pending-states))))
+             (advice-remove #'exercism--run-shell-command
+                            #'exercism-ert--run-shell-command-immediate)))
+      (exercism--submit-animation-stop)
+      (clrhash exercism--exercise-pending-states)
+      (when (file-exists-p workspace)
+        (delete-directory workspace t))))))
 
 (ert-deftest exercism--exercise-list-longest ()
   (should (zerop (exercism--exercise-list-longest nil 'slug)))
