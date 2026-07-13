@@ -458,6 +458,44 @@
   (should (eq #'exercism-exercise-list-reload
               (lookup-key exercism-exercise-list-mode-map "g"))))
 
+(ert-deftest exercism--exercise-url ()
+  (should (equal "https://exercism.org/tracks/emacs-lisp/exercises/two-fer"
+                 (exercism--exercise-url "emacs-lisp" "two-fer"))))
+
+(ert-deftest exercism-exercise-list-open-in-browser-key ()
+  (should (eq #'exercism-exercise-list-open-in-browser
+              (lookup-key exercism-exercise-list-mode-map "b"))))
+
+(defvar exercism-ert--browse-url-target nil)
+
+(defun exercism-ert--browse-url-recorder (url &rest _args)
+  "Advice that records the URL passed to `browse-url'."
+  (setq exercism-ert--browse-url-target url))
+
+(ert-deftest exercism-exercise-list-open-in-browser ()
+  (exercism-ert--with-exercise-list
+   (exercism-ert--sample-exercises)
+   (exercism-ert--make-solution-table nil)
+   nil
+   (lambda ()
+     (exercism-ert--goto-exercise-slug "two-fer")
+     (setq exercism-ert--browse-url-target nil)
+     (advice-add #'browse-url :override #'exercism-ert--browse-url-recorder)
+     (unwind-protect
+         (exercism-exercise-list-open-in-browser)
+       (advice-remove #'browse-url #'exercism-ert--browse-url-recorder))
+     (should (equal "https://exercism.org/tracks/emacs-lisp/exercises/two-fer"
+                    exercism-ert--browse-url-target)))))
+
+(ert-deftest exercism-exercise-list-open-in-browser-not-on-row ()
+  (exercism-ert--with-exercise-list
+   (exercism-ert--sample-exercises)
+   (exercism-ert--make-solution-table nil)
+   nil
+   (lambda ()
+     (goto-char (point-min))
+     (should-error (exercism-exercise-list-open-in-browser) :type 'user-error))))
+
 (ert-deftest exercism-exercise-list-submit-key ()
   (should (eq #'exercism-exercise-list-submit-exercise
               (lookup-key exercism-exercise-list-mode-map "s"))))

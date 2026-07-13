@@ -329,6 +329,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
     (define-key map (kbd "p") #'exercism-exercise-list-previous)
     (define-key map (kbd "g") #'exercism-exercise-list-reload)
     (define-key map (kbd "s") #'exercism-exercise-list-submit-exercise)
+    (define-key map (kbd "b") #'exercism-exercise-list-open-in-browser)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `exercism-exercise-list-mode'.")
@@ -434,6 +435,20 @@ Optional FRAME cycles animation when STATE is `submitting'."
                             slug exercism--current-track))
       (exercism--submit-slug slug))))
 
+(defun exercism--exercise-url (track-slug exercise-slug)
+  "Return the Exercism.org URL for EXERCISE-SLUG on TRACK-SLUG."
+  (format "https://exercism.org/tracks/%s/exercises/%s"
+          track-slug exercise-slug))
+
+(defun exercism-exercise-list-open-in-browser ()
+  "Open the exercise on the current line in a browser."
+  (interactive)
+  (exercism--ensure-current-track)
+  (let ((slug (exercism-exercise-list--slug-at-point)))
+    (unless slug
+      (user-error "Not on an exercise row"))
+    (browse-url (exercism--exercise-url exercism--current-track slug))))
+
 (defun exercism-exercise-list-reload ()
   "Reload the exercise list in the current buffer."
   (interactive)
@@ -489,7 +504,7 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
         (erase-buffer)
         (insert title "\n")
         (insert (make-string (length title) ?=) "\n\n")
-        (insert "RET open | s submit | n/p move | g reload | q quit\n\n")
+        (insert "RET open | b browser | s submit | n/p move | g reload | q quit\n\n")
         (insert (format "Track: %s\n" exercism--current-track))
         (insert (format "Exercises: %d" (length filtered)))
         (when only-unsolved-p
