@@ -24,7 +24,7 @@ Download the `exercism` CLI by following [the official guide](https://exercism.o
 (use-package exercism
   :ensure nil
   :load-path "~/projects/mine/exercism.el"
-  :commands (exercism exercism-configure exercism-cli-version exercism-self-check
+  :commands (exercism exercism-configure exercism-self-check
                       exercism-list-exercises exercism-list-unsolved-exercises)
   :bind (("C-c x" . exercism)))
 ```
@@ -80,7 +80,7 @@ Use `d` in the transient menu to download all unlocked exercises for the current
 
 Run tests for the current exercise. Results appear in `*compilation*`.
 
-Requires Exercism CLI 3.2.0+ (`M-x exercism-cli-version`).
+Requires Exercism CLI 3.2.0+ (check with `?` or `M-x exercism-self-check`).
 
 ## Submit
 

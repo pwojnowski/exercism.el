@@ -767,13 +767,6 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
               (when (string-match "exercism version \\([0-9.]+\\)" result)
                 (match-string 1 result))))))
 
-(defun exercism-cli-version ()
-  "Display the installed Exercism CLI version."
-  (interactive)
-  (exercism--cli-version
-   (lambda (version)
-     (message "[exercism] version: %s" (or version "unknown")))))
-
 (defvar exercism--self-check-results nil
   "Accumulator for `exercism-self-check' result lines.")
 
@@ -946,7 +939,6 @@ When ONLY-UNSOLVED-P is non-nil, omit completed exercises."
   "Bring up the Exercism action menu."
   [:description exercism--transient-name
    ("?" "Self-check configuration" exercism-self-check)
-   ("v" "Display CLI version" exercism-cli-version)
    ("c" "Configure" exercism-configure)
    ("t" "Set current track" exercism-set-track)
    ("d" "Download all unlocked exercises" exercism-download-all-unlocked-exercises)
