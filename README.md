@@ -49,7 +49,12 @@ exercism -w "path/to/dir"
 
 ## Set Current Track
 
-Choose the track you want to work on. The first run may take a few minutes while the track initializes locally.
+Press `t` in the exercise list to open the track picker. An API token is required so enrollment status can be checked.
+
+- `RET` on a joined track — select it and initialize locally if needed
+- `RET` on a not-joined track — open the track page in your browser, join there, confirm when prompted, then Emacs verifies enrollment before selecting
+
+The first run on a new track may take a few minutes while `hello-world` is downloaded locally.
 
 ## List Exercises
 
@@ -107,7 +112,7 @@ EMACS_USER_DIR=~/.emacs.d ./scripts/run-exercism-ert.sh
 
 ## Known Limitations
 
-- Registering for a track is not supported in Emacs; use the [Exercism website](https://exercism.org/tracks).
+- Track enrollment uses the Exercism website in a browser; Emacs verifies enrollment after you confirm.
 - The exercise list may include locked exercises because the CLI does not expose unlock status alone.
 
 ## Contributing

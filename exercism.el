@@ -182,7 +182,7 @@ directory, adopt it as the current track."
 ;; is_joined, num_learnt_concepts, num_completed_exercises,
 ;; has_notifications, and a non-null last_touched_at timestamp.
 
-(defun exercism--list-tracks (callback)
+(defun exercism--list-tracks (callback &optional error-callback)
   "Call CALLBACK with a list of track plists from GET /api/v2/tracks.
 
 Uses GET https://exercism.org/api/v2/tracks.  The endpoint is public;
@@ -202,15 +202,31 @@ a track, that track's object also includes `is_joined',
 Joined tracks are listed first.
 
 Optional query params (not used here): `criteria', `tags', and `status'
-(`status' requires authentication)."
+(`status' requires authentication).
+
+When ERROR-CALLBACK is provided, it is called with the same keyword
+arguments as `request' error handlers instead of signaling."
   (let ((url "https://exercism.org/api/v2/tracks")
         (headers (exercism--maybe-auth-headers))
         (success (cl-function
                   (lambda (&key data &allow-other-keys)
-                    (funcall callback (exercism--plist-get data 'tracks))))))
+                    (funcall callback (exercism--plist-get data 'tracks)))))
+        (error-handler
+         (cl-function
+          (lambda (&key error-thrown response &allow-other-keys)
+            (if error-callback
+                (funcall error-callback
+                         :error-thrown error-thrown
+                         :response response)
+              (user-error "Failed to fetch tracks: %s"
+                          (or (when response
+                                (format "HTTP %s"
+                                        (request-response-status-code response)))
+                              (format "%s" error-thrown))))))))
     (if headers
-        (request url :headers headers :parser #'json-read :success success)
-      (request url :parser #'json-read :success success))))
+        (request url :headers headers :parser #'json-read
+                 :success success :error error-handler)
+      (request url :parser #'json-read :success success :error error-handler))))
 
 (defvar exercism--track-icon-size 16
   "Height and width in pixels for track icons in the track list.")
@@ -761,6 +777,15 @@ Optional FRAME cycles animation when STATE is `submitting'."
   (message "[exercism] set current track to: %s" track)
   (exercism-exercise-list-reload))
 
+(defun exercism--exercise-list-apply-track-in-buffer (track buffer)
+  "Apply TRACK in BUFFER when it is a live exercise list buffer."
+  (unless (and (buffer-live-p buffer)
+               (with-current-buffer buffer
+                 (derived-mode-p 'exercism-exercise-list-mode)))
+    (user-error "Buffer is not a live Exercism exercise list buffer"))
+  (with-current-buffer buffer
+    (exercism--exercise-list-apply-track track)))
+
 (defvar exercism--track-list-buffer-name "*Exercism Tracks*"
   "Buffer name for track listings.")
 
@@ -783,6 +808,9 @@ Optional FRAME cycles animation when STATE is `submitting'."
 (defvar-local exercism-track-list-on-select nil
   "Callback invoked with a track slug when a track is selected.")
 
+(defvar-local exercism-track-list-origin-buffer nil
+  "Buffer from which the current track picker was opened.")
+
 (defvar-local exercism-track-list-auth-present-p nil
   "Non-nil when the track list was loaded with authentication.")
 
@@ -794,6 +822,81 @@ Optional FRAME cycles animation when STATE is `submitting'."
   "Return the track slug at point, or nil when not on a track row."
   (and (exercism-track-list--track-line-p)
        (get-text-property (point) 'exercism-track-slug)))
+
+(defun exercism-track-list--track-at-point ()
+  "Return the cached track plist at point, or nil when not on a track row."
+  (when-let ((slug (exercism-track-list--slug-at-point)))
+    (seq-find (lambda (track)
+                (equal (exercism--json-value (exercism--plist-get track 'slug))
+                       slug))
+              exercism-track-list-tracks)))
+
+(defun exercism--track-joined-p (track)
+  "Return non-nil when TRACK is joined on Exercism."
+  (exercism--json-bool (exercism--plist-get track 'is_joined)))
+
+(defun exercism--track-web-url (track)
+  "Return the Exercism.org URL for TRACK."
+  (or (when-let ((web-url (exercism--plist-get track 'web_url)))
+        (exercism--json-value web-url))
+      (format "https://exercism.org/tracks/%s"
+              (exercism--json-value (exercism--plist-get track 'slug)))))
+
+(defun exercism-track-list--track-buffer-live-p (buffer)
+  "Return non-nil when BUFFER is a live Exercism track list buffer."
+  (and buffer (buffer-live-p buffer)
+       (with-current-buffer buffer
+         (derived-mode-p 'exercism-track-list-mode))))
+
+(defun exercism-track-list--find-track-by-slug (tracks slug)
+  "Return the track plist for SLUG in TRACKS, or nil."
+  (seq-find (lambda (track)
+              (equal (exercism--json-value (exercism--plist-get track 'slug))
+                     slug))
+            tracks))
+
+(defun exercism-track-list--complete-selection (track buffer)
+  "Invoke the on-select callback for TRACK in its origin and close BUFFER."
+  (let ((slug (exercism--json-value (exercism--plist-get track 'slug)))
+        (callback exercism-track-list-on-select)
+        (origin-buffer exercism-track-list-origin-buffer))
+    (unless (buffer-live-p origin-buffer)
+      (user-error "The originating Exercism exercise list buffer no longer exists"))
+    (when callback
+      (with-current-buffer origin-buffer
+        (funcall callback slug)))
+    (when (buffer-live-p buffer)
+      (kill-buffer buffer))))
+
+(defun exercism-track-list--refresh-and-verify-join (track buffer)
+  "Refetch tracks and select TRACK in BUFFER if enrollment is detected."
+  (let ((slug (exercism--json-value (exercism--plist-get track 'slug)))
+        (title (exercism--json-value (exercism--plist-get track 'title))))
+    (exercism--list-tracks
+     (lambda (tracks)
+       (when (exercism-track-list--track-buffer-live-p buffer)
+         (with-current-buffer buffer
+           (setq exercism-track-list-tracks tracks)
+           (exercism--render-track-list)
+           (let ((refreshed (exercism-track-list--find-track-by-slug tracks slug)))
+             (if (and refreshed (exercism--track-joined-p refreshed))
+                 (exercism-track-list--complete-selection refreshed buffer)
+               (message "[exercism] enrollment was not detected for %s"
+                        title))))))
+     (cl-function
+      (lambda (&key error-thrown response &allow-other-keys)
+        (user-error "Failed to refresh tracks: %s"
+                    (or (when response
+                          (format "HTTP %s"
+                                  (request-response-status-code response)))
+                        (format "%s" error-thrown))))))))
+
+(defun exercism-track-list--join-track-in-browser (track buffer)
+  "Open TRACK in the browser and verify enrollment before selection."
+  (browse-url (exercism--track-web-url track))
+  (let ((title (exercism--json-value (exercism--plist-get track 'title))))
+    (when (y-or-n-p (format "Joined %s in the browser? " title))
+      (exercism-track-list--refresh-and-verify-join track buffer))))
 
 (defun exercism-track-list--goto-next-slug ()
   "Move point to the next track row, if any."
@@ -822,17 +925,17 @@ Optional FRAME cycles animation when STATE is `submitting'."
   (exercism-track-list--goto-previous-slug))
 
 (defun exercism-track-list-select-track ()
-  "Select the track on the current line."
+  "Select or join the track on the current line."
   (interactive)
-  (let ((slug (exercism-track-list--slug-at-point))
-        (callback exercism-track-list-on-select)
+  (let ((track (exercism-track-list--track-at-point))
         (buf (current-buffer)))
-    (unless slug
+    (unless track
       (user-error "Not on a track row"))
-    (when callback
-      (funcall callback slug))
-    (when (get-buffer buf)
-      (kill-buffer buf))))
+    (unless exercism-track-list-auth-present-p
+      (user-error "Configure Exercism first (`M-x exercism-configure`)"))
+    (if (exercism--track-joined-p track)
+        (exercism-track-list--complete-selection track buf)
+      (exercism-track-list--join-track-in-browser track buf))))
 
 (defun exercism-track-list-reload ()
   "Reload the track list in the current buffer."
@@ -931,7 +1034,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
       (erase-buffer)
       (insert title "\n")
       (insert (make-string (length title) ?=) "\n\n")
-      (insert "RET select | n/p move | g reload | q cancel\n\n")
+      (insert "RET select/join | n/p move | g reload | q cancel\n\n")
       (insert (format "Tracks: %d\n\n" (length tracks)))
       (insert (exercism--track-icon-separator)
               (format (format "%%-%ds  %%-%ds  %%%ds  %%%ds  %%-%ds  %%-%ds  %%-%ds  %%-%ds\n"
@@ -1005,34 +1108,39 @@ Optional FRAME cycles animation when STATE is `submitting'."
 
 (defun exercism--show-track-list (tracks on-select)
   "Cache TRACKS, render the picker, and call ON-SELECT with chosen slug."
-  (with-current-buffer (get-buffer-create exercism--track-list-buffer-name)
-    (exercism-track-list-mode)
-    (setq exercism-track-list-tracks tracks
-          exercism-track-list-on-select on-select
-          exercism-track-list-auth-present-p
-          (not (null (exercism--maybe-get-api-token))))
-    (exercism--render-track-list)
-    (exercism--prefetch-track-icons tracks)
-    (pop-to-buffer (current-buffer))))
+  (let ((origin-buffer (current-buffer)))
+    (with-current-buffer (get-buffer-create exercism--track-list-buffer-name)
+      (exercism-track-list-mode)
+      (setq exercism-track-list-tracks tracks
+            exercism-track-list-on-select on-select
+            exercism-track-list-origin-buffer origin-buffer
+            exercism-track-list-auth-present-p
+            (not (null (exercism--maybe-get-api-token))))
+      (exercism--render-track-list)
+      (exercism--prefetch-track-icons tracks)
+      (pop-to-buffer (current-buffer)))))
 
 (defun exercism-exercise-list-set-track ()
   "Set the current Exercism track and reload the exercise list."
   (interactive)
   (unless (derived-mode-p 'exercism-exercise-list-mode)
     (user-error "Not in Exercism exercise list buffer"))
-  (exercism--list-tracks
-   (lambda (tracks)
-     (exercism--sync-workspace-from-config)
-     (exercism--show-track-list
-      tracks
-      (lambda (track)
-        (let ((track-dir (expand-file-name track exercism--workspace)))
-          (if (file-exists-p track-dir)
-              (exercism--exercise-list-apply-track track)
-            (exercism--track-init
-             track
-             (lambda (_result)
-               (exercism--exercise-list-apply-track track))))))))))
+  (let ((exercise-list-buffer (current-buffer)))
+    (exercism--list-tracks
+     (lambda (tracks)
+       (exercism--sync-workspace-from-config)
+       (exercism--show-track-list
+        tracks
+        (lambda (track)
+          (let ((track-dir (expand-file-name track exercism--workspace)))
+            (if (file-exists-p track-dir)
+                (exercism--exercise-list-apply-track-in-buffer
+                 track exercise-list-buffer)
+              (exercism--track-init
+               track
+               (lambda (_result)
+                 (exercism--exercise-list-apply-track-in-buffer
+                  track exercise-list-buffer)))))))))))
 
 (define-derived-mode exercism-exercise-list-mode special-mode "Exercism Exercises"
   "Major mode for browsing Exercism exercises."

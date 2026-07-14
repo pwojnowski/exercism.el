@@ -468,6 +468,26 @@
      (exercism-exercise-list-previous)
      (should (equal "two-fer" (exercism-exercise-list--slug-at-point))))))
 
+(ert-deftest exercism--exercise-list-apply-track-in-buffer ()
+  (let ((origin-buffer (generate-new-buffer " *exercism-origin*"))
+        recorded-buffer
+        recorded-track)
+    (unwind-protect
+        (progn
+          (with-current-buffer origin-buffer
+            (exercism-exercise-list-mode))
+          (cl-letf (((symbol-function 'exercism--exercise-list-apply-track)
+                     (lambda (track)
+                       (setq recorded-buffer (current-buffer)
+                             recorded-track track))))
+            (with-temp-buffer
+              (exercism--exercise-list-apply-track-in-buffer
+               "emacs-lisp" origin-buffer)))
+          (should (eq origin-buffer recorded-buffer))
+          (should (equal "emacs-lisp" recorded-track)))
+      (when (buffer-live-p origin-buffer)
+        (kill-buffer origin-buffer)))))
+
 (ert-deftest exercism-exercise-list-reload-key ()
   (should (eq #'exercism-exercise-list-reload
               (lookup-key exercism-exercise-list-mode-map "g"))))
@@ -741,6 +761,7 @@
      (is_new . nil)
      (has_notifications . t)
      (last_touched_at . "2024-03-15T10:00:00Z")
+     (web_url . "https://exercism.org/tracks/emacs-lisp")
      (icon_url . "https://assets.exercism.org/tracks/emacs-lisp.svg"))
     ((slug . "go")
      (title . "Go")
@@ -751,6 +772,7 @@
      (is_new . t)
      (has_notifications . nil)
      (last_touched_at . :null)
+     (web_url . "https://exercism.org/tracks/go")
      (icon_url . "https://assets.exercism.org/tracks/go.svg"))
     ((slug . "python")
      (title . "Python")
@@ -763,6 +785,7 @@
      (is_new . nil)
      (has_notifications . nil)
      (last_touched_at . "2025-01-02T08:30:00Z")
+     (web_url . "https://exercism.org/tracks/python")
      (icon_url . "https://assets.exercism.org/tracks/python.svg"))))
 
 (defun exercism-ert--with-track-list (tracks auth-present-p body)
@@ -779,6 +802,11 @@
         (kill-buffer exercism--track-list-buffer-name))
       (when (file-exists-p exercism--track-icon-cache-root)
         (delete-directory exercism--track-icon-cache-root t)))))
+
+(defun exercism-ert--with-authenticated-track-list (tracks body)
+  "Show an authenticated track list and run BODY there."
+  (let ((exercism--api-token "test-token"))
+    (exercism-ert--with-track-list tracks t body)))
 
 (defun exercism-ert--track-slugs-in-buffer ()
   "Return track slugs in their displayed order."
@@ -1077,19 +1105,25 @@
 
 (ert-deftest exercism-track-list-select-track ()
   (let ((selected nil)
+        (callback-buffer nil)
         (origin-buffer (generate-new-buffer " *exercism-track-test*"))
-        (exercism--track-icon-cache-root (make-temp-file "exercism-icon-cache" 'dir)))
+        (exercism--track-icon-cache-root (make-temp-file "exercism-icon-cache" 'dir))
+        (exercism--api-token "test-token"))
     (unwind-protect
         (progn
-          (set-buffer origin-buffer)
-          (exercism--show-track-list
-           (exercism-ert--sample-tracks)
-           (lambda (slug) (setq selected slug)))
-          (set-buffer origin-buffer)
+          (with-current-buffer origin-buffer
+            (exercism-exercise-list-mode)
+            (exercism--show-track-list
+             (exercism-ert--sample-tracks)
+             (lambda (slug)
+               (setq selected slug
+                     callback-buffer (current-buffer)))))
           (with-current-buffer exercism--track-list-buffer-name
+            (setq exercism-track-list-auth-present-p t)
             (exercism-ert--goto-track-slug "python")
             (exercism-track-list-select-track))
           (should (equal "python" selected))
+          (should (eq origin-buffer callback-buffer))
           (should (not (get-buffer exercism--track-list-buffer-name))))
       (when (get-buffer exercism--track-list-buffer-name)
         (kill-buffer exercism--track-list-buffer-name))
@@ -1097,6 +1131,139 @@
         (kill-buffer origin-buffer))
       (when (file-exists-p exercism--track-icon-cache-root)
         (delete-directory exercism--track-icon-cache-root t)))))
+
+(ert-deftest exercism-track-list--track-at-point ()
+  (exercism-ert--with-authenticated-track-list (exercism-ert--sample-tracks)
+   (lambda ()
+     (exercism-ert--goto-track-slug "go")
+     (let ((track (exercism-track-list--track-at-point)))
+       (should track)
+       (should (equal "go"
+                      (exercism--json-value (exercism--plist-get track 'slug))))
+       (should-not (exercism--track-joined-p track))))))
+
+(ert-deftest exercism--track-web-url ()
+  (let ((track (car (exercism-ert--sample-tracks))))
+    (should (equal "https://exercism.org/tracks/emacs-lisp"
+                   (exercism--track-web-url track))))
+  (should (equal "https://exercism.org/tracks/rust"
+                 (exercism--track-web-url '((slug . "rust"))))))
+
+(ert-deftest exercism-track-list-select-track-requires-auth ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) nil
+   (lambda ()
+     (exercism-ert--goto-track-slug "python")
+     (should-error
+      (exercism-track-list-select-track)
+      :type 'user-error))))
+
+(ert-deftest exercism-track-list-select-track-not-on-row ()
+  (exercism-ert--with-authenticated-track-list (exercism-ert--sample-tracks)
+   (lambda ()
+     (goto-char (point-min))
+     (should-error
+      (exercism-track-list-select-track)
+      :type 'user-error))))
+
+(ert-deftest exercism-track-list-select-track-unjoined-opens-browser ()
+  (let (opened-url)
+    (exercism-ert--with-authenticated-track-list (exercism-ert--sample-tracks)
+     (lambda ()
+       (cl-letf (((symbol-function 'browse-url)
+                  (lambda (url) (setq opened-url url)))
+                 ((symbol-function 'y-or-n-p) (lambda (_prompt) nil)))
+         (exercism-ert--goto-track-slug "go")
+         (exercism-track-list-select-track)
+         (should (equal "https://exercism.org/tracks/go" opened-url))
+         (should (get-buffer exercism--track-list-buffer-name)))))))
+
+(ert-deftest exercism-track-list-select-track-unjoined-confirmed-verified ()
+  (let ((selected nil))
+    (exercism-ert--with-authenticated-track-list (exercism-ert--sample-tracks)
+     (lambda ()
+       (setq exercism-track-list-on-select (lambda (slug) (setq selected slug)))
+       (cl-letf (((symbol-function 'browse-url) #'ignore)
+                 ((symbol-function 'y-or-n-p) (lambda (_prompt) t))
+                 ((symbol-function 'exercism--list-tracks)
+                  (lambda (callback &optional _error-callback)
+                    (funcall callback
+                             (mapcar
+                              (lambda (track)
+                                (if (equal "go"
+                                           (exercism--json-value
+                                            (exercism--plist-get track 'slug)))
+                                    (append (list (cons 'is_joined t))
+                                            (cl-remove-if
+                                             (lambda (pair)
+                                               (eq (car pair) 'is_joined))
+                                             track))
+                                  track))
+                              (exercism-ert--sample-tracks))))))
+         (exercism-ert--goto-track-slug "go")
+         (exercism-track-list-select-track)
+         (should (equal "go" selected))
+         (should (not (get-buffer exercism--track-list-buffer-name))))))))
+
+(ert-deftest exercism-track-list-select-track-unjoined-declined ()
+  (let ((selected nil))
+    (exercism-ert--with-authenticated-track-list (exercism-ert--sample-tracks)
+     (lambda ()
+       (setq exercism-track-list-on-select (lambda (slug) (setq selected slug)))
+       (cl-letf (((symbol-function 'browse-url) #'ignore)
+                 ((symbol-function 'y-or-n-p) (lambda (_prompt) nil)))
+         (exercism-ert--goto-track-slug "go")
+         (exercism-track-list-select-track)
+         (should (null selected))
+         (should (get-buffer exercism--track-list-buffer-name)))))))
+
+(ert-deftest exercism-track-list-select-track-unjoined-not-verified ()
+  (let ((selected nil)
+        (messages nil))
+    (exercism-ert--with-authenticated-track-list (exercism-ert--sample-tracks)
+     (lambda ()
+       (setq exercism-track-list-on-select (lambda (slug) (setq selected slug)))
+       (cl-letf (((symbol-function 'browse-url) #'ignore)
+                 ((symbol-function 'y-or-n-p) (lambda (_prompt) t))
+                 ((symbol-function 'exercism--list-tracks)
+                  (lambda (callback &optional _error-callback)
+                    (funcall callback (exercism-ert--sample-tracks))))
+                 ((symbol-function 'message)
+                  (lambda (format-string &rest args)
+                    (push (apply #'format format-string args) messages))))
+         (exercism-ert--goto-track-slug "go")
+         (exercism-track-list-select-track)
+         (should (null selected))
+         (should (get-buffer exercism--track-list-buffer-name))
+         (should (member "[exercism] enrollment was not detected for Go"
+                         messages)))))))
+
+(ert-deftest exercism-track-list-select-track-refresh-failure ()
+  (exercism-ert--with-authenticated-track-list (exercism-ert--sample-tracks)
+   (lambda ()
+     (cl-letf (((symbol-function 'browse-url) #'ignore)
+               ((symbol-function 'y-or-n-p) (lambda (_prompt) t))
+               ((symbol-function 'exercism--list-tracks)
+                (lambda (_callback &optional error-callback)
+                  (funcall error-callback
+                           :error-thrown "network down"
+                           :response nil))))
+       (exercism-ert--goto-track-slug "go")
+       (should-error
+        (exercism-track-list-select-track)
+        :type 'user-error)))))
+
+(ert-deftest exercism-track-list-select-track-buffer-lifecycle ()
+  (let ((selected nil))
+    (exercism-ert--with-authenticated-track-list (exercism-ert--sample-tracks)
+     (lambda ()
+       (setq exercism-track-list-on-select
+             (lambda (slug)
+               (setq selected slug)
+               (kill-buffer exercism--track-list-buffer-name)))
+       (exercism-ert--goto-track-slug "python")
+       (exercism-track-list-select-track)
+       (should (equal "python" selected))
+       (should (not (get-buffer exercism--track-list-buffer-name)))))))
 
 (ert-deftest exercism-track-list-reload-key ()
   (should (eq #'exercism-track-list-reload
