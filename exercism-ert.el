@@ -728,5 +728,387 @@
       (when (file-exists-p workspace)
         (delete-directory workspace t)))))
 
+(defun exercism-ert--sample-tracks ()
+  "Return fixture track alists for tests."
+  '(((slug . "emacs-lisp")
+     (title . "Emacs Lisp")
+     (course . nil)
+     (num_concepts . 0)
+     (num_exercises . 86)
+     (num_learnt_concepts . 0)
+     (num_completed_exercises . 5)
+     (is_joined . t)
+     (is_new . nil)
+     (has_notifications . t)
+     (last_touched_at . "2024-03-15T10:00:00Z")
+     (icon_url . "https://assets.exercism.org/tracks/emacs-lisp.svg"))
+    ((slug . "go")
+     (title . "Go")
+     (course . nil)
+     (num_concepts . 25)
+     (num_exercises . 140)
+     (is_joined . nil)
+     (is_new . t)
+     (has_notifications . nil)
+     (last_touched_at . :null)
+     (icon_url . "https://assets.exercism.org/tracks/go.svg"))
+    ((slug . "python")
+     (title . "Python")
+     (course . t)
+     (num_concepts . 30)
+     (num_exercises . 120)
+     (num_learnt_concepts . 12)
+     (num_completed_exercises . 40)
+     (is_joined . t)
+     (is_new . nil)
+     (has_notifications . nil)
+     (last_touched_at . "2025-01-02T08:30:00Z")
+     (icon_url . "https://assets.exercism.org/tracks/python.svg"))))
+
+(defun exercism-ert--with-track-list (tracks auth-present-p body)
+  "Show track list in a temp buffer and run BODY there."
+  (let ((exercism--track-icon-cache-root (make-temp-file "exercism-icon-cache" 'dir)))
+    (unwind-protect
+        (progn
+          (exercism--show-track-list tracks (lambda (_slug) nil))
+          (with-current-buffer exercism--track-list-buffer-name
+            (setq exercism-track-list-auth-present-p auth-present-p)
+            (exercism--render-track-list)
+            (funcall body)))
+      (when (get-buffer exercism--track-list-buffer-name)
+        (kill-buffer exercism--track-list-buffer-name))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
+(defun exercism-ert--track-slugs-in-buffer ()
+  "Return track slugs in their displayed order."
+  (let (slugs)
+    (goto-char (point-min))
+    (while (not (eobp))
+      (when-let ((slug (get-text-property (point) 'exercism-track-slug)))
+        (push slug slugs))
+      (forward-line 1))
+    (nreverse slugs)))
+
+(defun exercism-ert--goto-track-slug (slug)
+  "Move point to the track row for SLUG in the current buffer."
+  (goto-char (point-min))
+  (catch 'found
+    (while (not (eobp))
+      (when (equal slug (get-text-property (point) 'exercism-track-slug))
+        (throw 'found t))
+      (forward-line 1))
+    (error "Track row not found: %s" slug)))
+
+(ert-deftest exercism--json-bool ()
+  (should (exercism--json-bool t))
+  (should (not (exercism--json-bool nil)))
+  (should (exercism--json-bool :json-true))
+  (should (not (exercism--json-bool :json-false))))
+
+(ert-deftest exercism--track-list-enrollment-label ()
+  (should (equal "Joined"
+                 (substring-no-properties
+                  (exercism--track-list-enrollment-label t t))))
+  (should (equal "Not joined"
+                 (substring-no-properties
+                  (exercism--track-list-enrollment-label nil t))))
+  (should (equal "—"
+                 (exercism--track-list-enrollment-label t nil))))
+
+(ert-deftest exercism--track-list-pad-right ()
+  (should (equal "  140" (exercism--track-list-pad-right "140" 5)))
+  (should (equal "40/120" (exercism--track-list-pad-right "40/120" 6)))
+  (should (equal " 12/30" (exercism--track-list-pad-right "12/30" 6))))
+
+(ert-deftest exercism--track-list-show-progress-p ()
+  (should (exercism--track-list-show-progress-p t t))
+  (should-not (exercism--track-list-show-progress-p t nil))
+  (should-not (exercism--track-list-show-progress-p nil t)))
+
+(ert-deftest exercism--track-list-progress-label ()
+  (should (equal "5/12" (exercism--track-list-progress-label 5 12 t)))
+  (should (equal "0/12" (exercism--track-list-progress-label nil 12 t)))
+  (should (equal "12" (exercism--track-list-progress-label 5 12 nil)))
+  (should (equal "0" (exercism--track-list-progress-label nil nil nil))))
+
+(ert-deftest exercism--track-list-concepts-label ()
+  (should (fboundp 'exercism--track-list-concepts-label))
+  (should (equal "—" (exercism--track-list-concepts-label 0 0 t)))
+  (should (equal "5/12" (exercism--track-list-concepts-label 5 12 t)))
+  (should (equal "0/12" (exercism--track-list-concepts-label nil 12 t)))
+  (should (equal "12" (exercism--track-list-concepts-label 5 12 nil))))
+
+(ert-deftest exercism--track-list-type-label ()
+  (should (equal "course" (exercism--track-list-type-label t)))
+  (should (equal "practice" (exercism--track-list-type-label nil))))
+
+(ert-deftest exercism--track-list-is-new-label ()
+  (should (equal "new"
+                 (exercism-ert--label-text
+                  (exercism--track-list-is-new-label t))))
+  (should (equal "" (exercism--track-list-is-new-label nil))))
+
+(ert-deftest exercism--track-list-notifications-label ()
+  (should (equal "notify"
+                 (exercism-ert--label-text
+                  (exercism--track-list-notifications-label t t))))
+  (should (equal "" (exercism--track-list-notifications-label nil t)))
+  (should (equal "—" (exercism--track-list-notifications-label t nil))))
+
+(ert-deftest exercism--track-list-last-touched-label ()
+  (should (equal "2024-03-15"
+                 (exercism--track-list-last-touched-label "2024-03-15T10:00:00Z")))
+  (should (equal "—" (exercism--track-list-last-touched-label nil)))
+  (should (equal "—" (exercism--track-list-last-touched-label :null))))
+
+(ert-deftest exercism--asset-request-headers ()
+  (should (equal exercism--http-user-agent
+                 (cdr (assoc "User-Agent" (exercism--asset-request-headers))))))
+
+(ert-deftest exercism--fetch-track-icon-uses-native-asynchronous-retrieval ()
+  (let ((exercism--track-icon-cache-root
+         (make-temp-file "exercism-icon-cache" 'dir))
+        retrieval-arguments
+        retrieval-headers)
+    (unwind-protect
+        (cl-letf (((symbol-function 'url-retrieve)
+                   (lambda (&rest arguments)
+                     (setq retrieval-arguments arguments
+                           retrieval-headers url-request-extra-headers))))
+          (exercism--fetch-track-icon
+           "go" "https://assets.exercism.org/tracks/go.svg"
+           #'ignore)
+          (should retrieval-arguments)
+          (should (equal (exercism--asset-request-headers)
+                         retrieval-headers))
+          (should (eq t (nth 3 retrieval-arguments))))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
+(ert-deftest exercism--track-icon-cache-path ()
+  (let ((exercism--track-icon-cache-root (make-temp-file "exercism-icon-cache" 'dir)))
+    (unwind-protect
+        (should (string-match-p "/emacs-lisp\\.svg\\'"
+                                (exercism--track-icon-cache-path "emacs-lisp")))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
+(ert-deftest exercism--track-icon-fallback-display ()
+  (should (equal " G"
+                 (substring-no-properties
+                  (exercism--track-icon-fallback-display "go")))))
+
+(ert-deftest exercism--track-icon-separator-aligns-title-by-pixels ()
+  (let ((exercism--track-icon-size 16))
+    (cl-letf (((symbol-function 'frame-char-width)
+               (lambda (&optional _frame) 8)))
+      (let ((separator
+             (and (fboundp 'exercism--track-icon-separator)
+                  (exercism--track-icon-separator))))
+        (should separator)
+        (should (equal " " (substring-no-properties separator)))
+        (should (equal '(space :align-to (24))
+                       (get-text-property 0 'display separator)))))))
+
+(ert-deftest exercism--track-icon-image-uses-create-image-data-api ()
+  (let* ((exercism--track-icon-cache-root
+          (make-temp-file "exercism-icon-cache" 'dir))
+         (path (exercism--track-icon-cache-path "go"))
+         create-image-arguments)
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert "<svg></svg>"))
+          (cl-letf (((symbol-function 'image-type-available-p)
+                     (lambda (_type) t))
+                    ((symbol-function 'create-image)
+                     (lambda (&rest arguments)
+                       (setq create-image-arguments arguments)
+                       '(image :type svg))))
+            (should (equal '(image :type svg)
+                           (exercism--track-icon-image path)))
+            (should (equal
+                     '("<svg></svg>" svg t
+                       :ascent center :height 16 :width 16)
+                     create-image-arguments))))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
+(ert-deftest exercism--prefetch-track-icons-renders-once-after-batch ()
+  (let ((render-count 0))
+    (with-temp-buffer
+      (exercism-track-list-mode)
+      (rename-buffer exercism--track-list-buffer-name t)
+      (cl-letf (((symbol-function 'exercism--fetch-track-icon)
+                 (lambda (_slug _icon-url callback)
+                   (funcall callback "/tmp/icon.svg")))
+                ((symbol-function 'exercism--render-track-list)
+                 (lambda ()
+                   (setq render-count (1+ render-count)))))
+        (exercism--prefetch-track-icons (exercism-ert--sample-tracks))
+        (should (= 1 render-count))))))
+
+(ert-deftest exercism--track-icon-display-invalid-file ()
+  (let* ((exercism--track-icon-cache-root (make-temp-file "exercism-icon-cache" 'dir))
+         (path (exercism--track-icon-cache-path "broken")))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert "not an svg"))
+          (should (equal " B"
+                         (substring-no-properties
+                          (exercism--track-icon-display "broken")))))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
+(ert-deftest exercism--svg-file-p ()
+  (let* ((exercism--track-icon-cache-root (make-temp-file "exercism-icon-cache" 'dir))
+         (svg-path (exercism--track-icon-cache-path "valid"))
+         (txt-path (expand-file-name "invalid.svg"
+                                     (exercism--track-icon-cache-dir))))
+    (unwind-protect
+        (progn
+          (with-temp-file svg-path
+            (insert "<svg></svg>"))
+          (with-temp-file txt-path
+            (insert "nope"))
+          (should (exercism--svg-file-p svg-path))
+          (should (not (exercism--svg-file-p txt-path))))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
+(ert-deftest exercism--show-track-list-all ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) t
+   (lambda ()
+     (should (derived-mode-p 'exercism-track-list-mode))
+     (should (equal '("emacs-lisp" "go" "python")
+                    (exercism-ert--track-slugs-in-buffer)))
+     (goto-char (point-min))
+     (should (search-forward "Enrollment" nil t))
+     (should (search-forward "Joined" nil t))
+     (should (search-forward "notify" nil t))
+     (should (search-forward "new" nil t)))))
+
+(ert-deftest exercism-track-list-renders-zero-concepts-as-unavailable ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) t
+   (lambda ()
+     (exercism-ert--goto-track-slug "emacs-lisp")
+     (should-not
+      (string-match-p
+       "0/0"
+       (buffer-substring-no-properties
+        (line-beginning-position) (line-end-position)))))))
+
+(ert-deftest exercism-track-list-mode-activation ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) t
+   (lambda ()
+     (should (derived-mode-p 'exercism-track-list-mode)))))
+
+(ert-deftest exercism-track-list-row-properties ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) t
+   (lambda ()
+     (exercism-ert--goto-track-slug "go")
+     (should (equal "go" (exercism-track-list--slug-at-point))))))
+
+(ert-deftest exercism-track-list-right-aligns-count-columns ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) t
+   (lambda ()
+     (let ((fields
+            (mapcar
+             (lambda (slug)
+               (exercism-ert--goto-track-slug slug)
+               (let ((line (buffer-substring-no-properties
+                            (line-beginning-position)
+                            (line-end-position))))
+                 (and (string-match
+                       "  \\([ \t]*[0-9/—][0-9/—]*\\)  \\(?:practice\\|course\\)"
+                       line)
+                      (match-string 1 line))))
+             '("go" "python" "emacs-lisp"))))
+       (should (not (member nil fields)))
+       (let ((widths (mapcar #'length fields)))
+         (should (= (length (seq-uniq widths)) 1))
+         (should (string-match-p "\\`[ \t]+" (car fields))))))))
+
+(ert-deftest exercism-track-list-shows-totals-for-unjoined-tracks ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) t
+   (lambda ()
+     (exercism-ert--goto-track-slug "go")
+     (let ((line (buffer-substring-no-properties
+                  (line-beginning-position) (line-end-position))))
+       (should (string-match-p "Not joined" line))
+       (should (string-match-p "25" line))
+       (should (string-match-p "140" line))
+       (should-not (string-match-p "0/140" line))
+       (should-not (string-match-p "0/25" line))))))
+
+(ert-deftest exercism-track-list-does-not-render-slug ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) t
+   (lambda ()
+     (exercism-ert--goto-track-slug "emacs-lisp")
+     (should-not
+      (string-match-p
+       "  emacs-lisp\\'"
+       (buffer-substring-no-properties
+        (line-beginning-position) (line-end-position)))))))
+
+(ert-deftest exercism-track-list--slug-at-point ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) t
+   (lambda ()
+     (exercism-ert--goto-track-slug "python")
+     (should (equal "python" (exercism-track-list--slug-at-point)))
+     (goto-char (point-min))
+     (should (not (exercism-track-list--slug-at-point))))))
+
+(ert-deftest exercism-track-list-next ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) t
+   (lambda ()
+     (exercism-ert--goto-track-slug "emacs-lisp")
+     (exercism-track-list-next)
+     (should (equal "go" (exercism-track-list--slug-at-point))))))
+
+(ert-deftest exercism-track-list-previous ()
+  (exercism-ert--with-track-list (exercism-ert--sample-tracks) t
+   (lambda ()
+     (exercism-ert--goto-track-slug "go")
+     (exercism-track-list-previous)
+     (should (equal "emacs-lisp" (exercism-track-list--slug-at-point))))))
+
+(ert-deftest exercism-track-list-select-track ()
+  (let ((selected nil)
+        (origin-buffer (generate-new-buffer " *exercism-track-test*"))
+        (exercism--track-icon-cache-root (make-temp-file "exercism-icon-cache" 'dir)))
+    (unwind-protect
+        (progn
+          (set-buffer origin-buffer)
+          (exercism--show-track-list
+           (exercism-ert--sample-tracks)
+           (lambda (slug) (setq selected slug)))
+          (set-buffer origin-buffer)
+          (with-current-buffer exercism--track-list-buffer-name
+            (exercism-ert--goto-track-slug "python")
+            (exercism-track-list-select-track))
+          (should (equal "python" selected))
+          (should (not (get-buffer exercism--track-list-buffer-name))))
+      (when (get-buffer exercism--track-list-buffer-name)
+        (kill-buffer exercism--track-list-buffer-name))
+      (when (buffer-live-p origin-buffer)
+        (kill-buffer origin-buffer))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
+(ert-deftest exercism-track-list-reload-key ()
+  (should (eq #'exercism-track-list-reload
+              (lookup-key exercism-track-list-mode-map "g"))))
+
+(ert-deftest exercism-track-list-select-key ()
+  (should (eq #'exercism-track-list-select-track
+              (lookup-key exercism-track-list-mode-map (kbd "RET")))))
+
+(ert-deftest exercism-track-list-quit-key ()
+  (should (eq #'quit-window
+              (lookup-key exercism-track-list-mode-map "q"))))
+
 (provide 'exercism-ert)
 ;;; exercism-ert.el ends here

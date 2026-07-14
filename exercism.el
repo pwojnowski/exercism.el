@@ -21,6 +21,11 @@
 (require 'cl-lib)
 (require 'json)
 (require 'request)
+(require 'url)
+(require 'xdg nil t)
+
+(defconst exercism--http-user-agent "Mozilla/5.0 (compatible; exercism.el/1.0)"
+  "User-Agent sent when downloading static assets from Exercism.")
 
 (defgroup exercism nil
   "Exercism.org CLI integration."
@@ -178,12 +183,13 @@ directory, adopt it as the current track."
 ;; has_notifications, and a non-null last_touched_at timestamp.
 
 (defun exercism--list-tracks (callback)
-  "Call CALLBACK with a list of track slug strings.
+  "Call CALLBACK with a list of track plists from GET /api/v2/tracks.
 
 Uses GET https://exercism.org/api/v2/tracks.  The endpoint is public;
-authentication is optional and this function does not send auth headers.
+when an API token is configured, auth headers are sent so joined-track
+fields are included.
 
-Response: a JSON object with a top-level `tracks' array.  Each track
+CALLBACK receives the `tracks' array from the response.  Each track
 object always includes `slug', `title', `course', `num_concepts',
 `num_exercises', `web_url', `icon_url', `tags', `last_touched_at',
 `is_new', and `links' (with `self', `exercises', and `concepts' URLs).
@@ -197,15 +203,199 @@ Joined tracks are listed first.
 
 Optional query params (not used here): `criteria', `tags', and `status'
 (`status' requires authentication)."
-  (request "https://exercism.org/api/v2/tracks"
-    :parser #'json-read
-    :success (cl-function
-              (lambda (&key data &allow-other-keys)
-                (let* ((tracks (exercism--plist-get data 'tracks))
-                       (track-slugs (mapcar (lambda (track)
-                                              (exercism--plist-get track 'slug))
-                                            tracks)))
-                  (funcall callback track-slugs))))))
+  (let ((url "https://exercism.org/api/v2/tracks")
+        (headers (exercism--maybe-auth-headers))
+        (success (cl-function
+                  (lambda (&key data &allow-other-keys)
+                    (funcall callback (exercism--plist-get data 'tracks))))))
+    (if headers
+        (request url :headers headers :parser #'json-read :success success)
+      (request url :parser #'json-read :success success))))
+
+(defvar exercism--track-icon-size 16
+  "Height and width in pixels for track icons in the track list.")
+
+(defvar exercism--track-icon-cache-root nil
+  "When non-nil, override the root directory for cached track icons.")
+
+(defun exercism--user-cache-dir ()
+  "Return the user cache directory, preferring XDG when available."
+  (or exercism--track-icon-cache-root
+      (if (fboundp 'xdg-user-dirs-cache-dir)
+          (xdg-user-dirs-cache-dir)
+        (expand-file-name ".cache/" "~"))))
+
+(defun exercism--track-icon-cache-dir ()
+  "Return and ensure the XDG cache directory for track icons."
+  (let ((dir (expand-file-name "exercism/track-icons/"
+                               (exercism--user-cache-dir))))
+    (make-directory dir t)
+    dir))
+
+(defun exercism--track-icon-cache-path (slug)
+  "Return the cache file path for track SLUG icon."
+  (expand-file-name (format "%s.svg" slug) (exercism--track-icon-cache-dir)))
+
+(defun exercism--svg-file-p (path)
+  "Return non-nil when PATH looks like an SVG file."
+  (and (file-exists-p path)
+       (with-temp-buffer
+         (condition-case nil
+             (progn
+               (insert-file-contents path nil 0 512)
+               (goto-char (point-min))
+               (looking-at "\\`\\s-*<svg"))
+           (error nil)))))
+
+(defun exercism--asset-request-headers ()
+  "Return HTTP headers for Exercism static asset downloads."
+  `(("User-Agent" . ,exercism--http-user-agent)))
+
+(defun exercism--track-icon-image (path)
+  "Return an image for cached SVG PATH, or nil when unavailable."
+  (when (and (image-type-available-p 'svg)
+             (exercism--svg-file-p path))
+    (condition-case nil
+        (create-image (exercism--file-to-string path) 'svg t
+                      :ascent 'center
+                      :height exercism--track-icon-size
+                      :width exercism--track-icon-size)
+      (error nil))))
+
+(defun exercism--track-icon-fallback-display (slug)
+  "Return a text fallback when track SLUG icon cannot be rendered."
+  (propertize (format "%2s" (upcase (substring slug 0 1)))
+              'face 'font-lock-constant-face))
+
+(defun exercism--fetch-track-icon (slug icon-url callback)
+  "Ensure SLUG icon is cached from ICON-URL, then call CALLBACK with path."
+  (let ((path (exercism--track-icon-cache-path slug)))
+    (if (exercism--svg-file-p path)
+        (funcall callback path)
+      (when (file-exists-p path)
+        (delete-file path))
+      (let ((url-request-extra-headers (exercism--asset-request-headers)))
+        (url-retrieve
+         icon-url
+         (lambda (status)
+           (unwind-protect
+               (unless (plist-get status :error)
+                 (goto-char (point-min))
+                 (when (re-search-forward "\r?\n\r?\n" nil t)
+                   (let ((data (buffer-substring-no-properties
+                                (point) (point-max))))
+                     (when (string-match-p "\\`\\s-*<svg" data)
+                       (with-temp-file path
+                         (insert data))))))
+             (when (buffer-live-p (current-buffer))
+               (kill-buffer (current-buffer))))
+           (funcall callback (and (exercism--svg-file-p path) path)))
+         nil t t)))))
+
+(defun exercism--track-icon-display (slug)
+  "Return a propertized inline display for cached track SLUG icon."
+  (let ((path (exercism--track-icon-cache-path slug)))
+    (if-let ((image (exercism--track-icon-image path)))
+        (propertize " " 'display (list image))
+      (exercism--track-icon-fallback-display slug))))
+
+(defun exercism--track-icon-separator ()
+  "Return a space aligning track titles after the fixed-width icon column."
+  (propertize
+   " " 'display
+   `(space :align-to
+           ,(list (+ exercism--track-icon-size (frame-char-width))))))
+
+(defun exercism--prefetch-track-icons (tracks)
+  "Download missing icons for TRACKS and refresh the track list buffer."
+  (let* ((tracks-with-icons
+          (seq-filter
+           (lambda (track)
+             (and (exercism--plist-get track 'slug)
+                  (exercism--plist-get track 'icon_url)))
+           tracks))
+         (remaining (length tracks-with-icons)))
+    (seq-doseq (track tracks-with-icons)
+      (let ((slug (exercism--json-value (exercism--plist-get track 'slug)))
+            (icon-url (exercism--plist-get track 'icon_url)))
+        (exercism--fetch-track-icon
+         slug icon-url
+         (lambda (_path)
+           (setq remaining (1- remaining))
+           (when (zerop remaining)
+             (when-let ((buffer (get-buffer exercism--track-list-buffer-name)))
+               (with-current-buffer buffer
+                 (when (derived-mode-p 'exercism-track-list-mode)
+                   (exercism--render-track-list)))))))))))
+
+(defun exercism--track-list-enrollment-label (is-joined auth-present-p)
+  "Return enrollment label for IS-JOINED when AUTH-PRESENT-P."
+  (cond ((not auth-present-p) "—")
+        ((exercism--json-bool is-joined) (propertize "Joined" 'face 'success))
+        (t (propertize "Not joined" 'face 'shadow))))
+
+(defun exercism--track-list-progress-count (value)
+  "Return progress count VALUE as a string, treating nil as zero."
+  (number-to-string (if (numberp value) value 0)))
+
+(defun exercism--track-list-show-progress-p (auth-present-p is-joined)
+  "Return non-nil when AUTH-PRESENT-P and IS-JOINED warrant progress display."
+  (and auth-present-p (exercism--json-bool is-joined)))
+
+(defun exercism--track-list-progress-label (learnt total show-progress-p)
+  "Return progress label for LEARNT/TOTAL when SHOW-PROGRESS-P."
+  (if show-progress-p
+      (format "%s/%s"
+              (exercism--track-list-progress-count learnt)
+              (exercism--track-list-progress-count total))
+    (exercism--track-list-progress-count total)))
+
+(defun exercism--track-list-concepts-label (learnt total show-progress-p)
+  "Return concepts progress, or an em dash when TOTAL is zero."
+  (if (and (numberp total) (zerop total))
+      "—"
+    (exercism--track-list-progress-label learnt total show-progress-p)))
+
+(defun exercism--track-list-type-label (course-p)
+  "Return track type label for COURSE-P."
+  (if (exercism--json-bool course-p) "course" "practice"))
+
+(defun exercism--track-list-is-new-label (is-new-p)
+  "Return propertized new-track badge label for IS-NEW-P."
+  (if (exercism--json-bool is-new-p)
+      (propertize "new" 'face 'warning)
+    ""))
+
+(defun exercism--track-list-notifications-label (has-notifications auth-present-p)
+  "Return propertized notifications label for HAS-NOTIFICATIONS."
+  (cond ((not auth-present-p) "—")
+        ((exercism--json-bool has-notifications) (propertize "notify" 'face 'error))
+        (t "")))
+
+(defun exercism--track-list-last-touched-label (timestamp)
+  "Return a short date label for TIMESTAMP, or \"—\" when absent."
+  (let ((value (and timestamp (not (eq timestamp :null))
+                    (exercism--json-value timestamp))))
+    (if (and value (string-match "\\`\\([0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\\)" value))
+        (match-string 1 value)
+      "—")))
+
+(defun exercism--track-list-label-width (label)
+  "Return display width of propertized track list LABEL."
+  (length (substring-no-properties (or label ""))))
+
+(defun exercism--track-list-pad-label (label width)
+  "Return LABEL padded with spaces to WIDTH display columns."
+  (let* ((text (substring-no-properties (or label "")))
+         (padding (make-string (max 0 (- width (length text))) ?\s)))
+    (if (string-empty-p text)
+        (make-string width ?\s)
+      (concat label padding))))
+
+(defun exercism--track-list-pad-right (label width)
+  "Return plain LABEL right-aligned within WIDTH display columns."
+  (format (format "%%%ds" width)
+          (substring-no-properties (or label ""))))
 
 ;; GET https://exercism.org/api/v2/tracks/{slug}/exercises
 ;;
@@ -261,19 +451,31 @@ Authenticated users on a joined track get accurate `is_unlocked' values."
   (unless exercism--current-track
     (user-error "Set a track first (`t' in the exercise list, or `M-x exercism-exercise-list-set-track')")))
 
-(defun exercism--get-api-token ()
-  "Return the configured Exercism API token, or signal an error."
+(defun exercism--load-api-token ()
+  "Return the configured Exercism API token, or nil when unset."
   (unless (and (boundp 'exercism--api-token) exercism--api-token)
     (let ((token (alist-get 'token (exercism--read-user-config))))
       (when (and token (not (string-empty-p token)))
         (setq exercism--api-token token))))
-  (unless (and (boundp 'exercism--api-token) exercism--api-token)
-    (user-error "Configure Exercism first (`M-x exercism-configure`)"))
-  exercism--api-token)
+  (and (boundp 'exercism--api-token) exercism--api-token))
+
+(defun exercism--get-api-token ()
+  "Return the configured Exercism API token, or signal an error."
+  (or (exercism--load-api-token)
+      (user-error "Configure Exercism first (`M-x exercism-configure`)")))
+
+(defun exercism--maybe-get-api-token ()
+  "Return the configured Exercism API token, or nil when unset."
+  (exercism--load-api-token))
 
 (defun exercism--auth-headers ()
   "Return request headers for authenticated Exercism API calls."
   `(("Authorization" . ,(concat "Bearer " (exercism--get-api-token)))))
+
+(defun exercism--maybe-auth-headers ()
+  "Return auth headers when a token is configured, otherwise nil."
+  (when-let ((token (exercism--maybe-get-api-token)))
+    `(("Authorization" . ,(concat "Bearer " token)))))
 
 (defun exercism--list-solutions (track-slug callback)
   "Call CALLBACK with a slug->status hash table for TRACK-SLUG."
@@ -559,6 +761,260 @@ Optional FRAME cycles animation when STATE is `submitting'."
   (message "[exercism] set current track to: %s" track)
   (exercism-exercise-list-reload))
 
+(defvar exercism--track-list-buffer-name "*Exercism Tracks*"
+  "Buffer name for track listings.")
+
+(defvar exercism-track-list-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "RET") #'exercism-track-list-select-track)
+    (define-key map (kbd "n") #'exercism-track-list-next)
+    (define-key map (kbd "p") #'exercism-track-list-previous)
+    (define-key map (kbd "g") #'exercism-track-list-reload)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Keymap for `exercism-track-list-mode'.")
+
+(defconst exercism-track-list-title "Exercism Tracks"
+  "Title shown in the track list buffer.")
+
+(defvar-local exercism-track-list-tracks nil
+  "Cached track plists for the current track list buffer.")
+
+(defvar-local exercism-track-list-on-select nil
+  "Callback invoked with a track slug when a track is selected.")
+
+(defvar-local exercism-track-list-auth-present-p nil
+  "Non-nil when the track list was loaded with authentication.")
+
+(defun exercism-track-list--track-line-p ()
+  "Return non-nil when point is on a track row."
+  (get-text-property (point) 'exercism-track-slug))
+
+(defun exercism-track-list--slug-at-point ()
+  "Return the track slug at point, or nil when not on a track row."
+  (and (exercism-track-list--track-line-p)
+       (get-text-property (point) 'exercism-track-slug)))
+
+(defun exercism-track-list--goto-next-slug ()
+  "Move point to the next track row, if any."
+  (let ((next (next-single-property-change (point) 'exercism-track-slug)))
+    (when next
+      (goto-char next)
+      (unless (exercism-track-list--track-line-p)
+        (exercism-track-list--goto-next-slug)))))
+
+(defun exercism-track-list--goto-previous-slug ()
+  "Move point to the previous track row, if any."
+  (let ((prev (previous-single-property-change (point) 'exercism-track-slug)))
+    (when prev
+      (goto-char prev)
+      (unless (exercism-track-list--track-line-p)
+        (exercism-track-list--goto-previous-slug)))))
+
+(defun exercism-track-list-next ()
+  "Move to the next track row."
+  (interactive)
+  (exercism-track-list--goto-next-slug))
+
+(defun exercism-track-list-previous ()
+  "Move to the previous track row."
+  (interactive)
+  (exercism-track-list--goto-previous-slug))
+
+(defun exercism-track-list-select-track ()
+  "Select the track on the current line."
+  (interactive)
+  (let ((slug (exercism-track-list--slug-at-point))
+        (callback exercism-track-list-on-select)
+        (buf (current-buffer)))
+    (unless slug
+      (user-error "Not on a track row"))
+    (when callback
+      (funcall callback slug))
+    (when (get-buffer buf)
+      (kill-buffer buf))))
+
+(defun exercism-track-list-reload ()
+  "Reload the track list in the current buffer."
+  (interactive)
+  (unless (derived-mode-p 'exercism-track-list-mode)
+    (user-error "Not in Exercism track list buffer"))
+  (exercism--list-tracks
+   (lambda (tracks)
+     (setq exercism-track-list-tracks tracks
+           exercism-track-list-auth-present-p
+           (not (null (exercism--maybe-get-api-token))))
+     (exercism--render-track-list)
+     (exercism--prefetch-track-icons tracks))))
+
+(define-derived-mode exercism-track-list-mode special-mode "Exercism Tracks"
+  "Major mode for browsing Exercism tracks."
+  (setq buffer-read-only t)
+  (hl-line-mode 1))
+
+(defun exercism--track-list-longest (tracks property)
+  "Return the longest PROPERTY string length among TRACKS."
+  (apply #'max 0
+         (mapcar (lambda (track)
+                   (length (exercism--json-value
+                            (exercism--plist-get track property))))
+                 tracks)))
+
+(defun exercism--track-list-column-widths (tracks auth-present-p)
+  "Return column widths for TRACKS rendered with AUTH-PRESENT-P."
+  (let ((enrollment-width
+         (apply #'max 10 (mapcar (lambda (track)
+                                   (exercism--track-list-label-width
+                                    (exercism--track-list-enrollment-label
+                                     (exercism--plist-get track 'is_joined)
+                                     auth-present-p)))
+                                 tracks)))
+        (concepts-width
+         (apply #'max 8 (mapcar (lambda (track)
+                                  (exercism--track-list-label-width
+                                   (exercism--track-list-concepts-label
+                                    (exercism--plist-get track 'num_learnt_concepts)
+                                    (exercism--plist-get track 'num_concepts)
+                                    (exercism--track-list-show-progress-p
+                                     auth-present-p
+                                     (exercism--plist-get track 'is_joined)))))
+                                tracks)))
+        (exercises-width
+         (apply #'max 9 (mapcar (lambda (track)
+                                  (exercism--track-list-label-width
+                                   (exercism--track-list-progress-label
+                                    (exercism--plist-get track 'num_completed_exercises)
+                                    (exercism--plist-get track 'num_exercises)
+                                    (exercism--track-list-show-progress-p
+                                     auth-present-p
+                                     (exercism--plist-get track 'is_joined)))))
+                                tracks)))
+        (type-width
+         (apply #'max 8 (mapcar (lambda (track)
+                                  (exercism--track-list-label-width
+                                   (exercism--track-list-type-label
+                                    (exercism--plist-get track 'course))))
+                                tracks)))
+        (new-width 3)
+        (notify-width
+         (apply #'max 6 (mapcar (lambda (track)
+                                  (exercism--track-list-label-width
+                                   (exercism--track-list-notifications-label
+                                    (exercism--plist-get track 'has_notifications)
+                                    auth-present-p)))
+                                tracks)))
+        (touched-width
+         (apply #'max 10 (mapcar (lambda (track)
+                                   (exercism--track-list-label-width
+                                    (exercism--track-list-last-touched-label
+                                     (exercism--plist-get track 'last_touched_at))))
+                                 tracks))))
+    (list (exercism--track-list-longest tracks 'title)
+          enrollment-width concepts-width exercises-width type-width
+          new-width notify-width touched-width)))
+
+(defun exercism--render-track-list ()
+  "Redraw the track list buffer from cached data."
+  (let* ((tracks exercism-track-list-tracks)
+         (auth-present-p exercism-track-list-auth-present-p)
+         (widths (exercism--track-list-column-widths tracks auth-present-p))
+         (title-width (nth 0 widths))
+         (enrollment-width (nth 1 widths))
+         (concepts-width (nth 2 widths))
+         (exercises-width (nth 3 widths))
+         (type-width (nth 4 widths))
+         (new-width (nth 5 widths))
+         (notify-width (nth 6 widths))
+         (touched-width (nth 7 widths))
+         (title exercism-track-list-title))
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert title "\n")
+      (insert (make-string (length title) ?=) "\n\n")
+      (insert "RET select | n/p move | g reload | q cancel\n\n")
+      (insert (format "Tracks: %d\n\n" (length tracks)))
+      (insert (exercism--track-icon-separator)
+              (format (format "%%-%ds  %%-%ds  %%%ds  %%%ds  %%-%ds  %%-%ds  %%-%ds  %%-%ds\n"
+                              title-width enrollment-width concepts-width
+                              exercises-width type-width new-width
+                              notify-width touched-width)
+                      "Track" "Enrollment" "Concepts" "Exercises"
+                      "Type" "New" "Notify" "Last touched"))
+      (insert (make-string (+ title-width enrollment-width concepts-width
+                              exercises-width type-width new-width
+                              notify-width touched-width 18)
+                           ?-)
+              "\n")
+      (seq-doseq (track tracks)
+        (let* ((slug (exercism--json-value (exercism--plist-get track 'slug)))
+               (track-title (exercism--json-value (exercism--plist-get track 'title)))
+               (enrollment (exercism--track-list-enrollment-label
+                            (exercism--plist-get track 'is_joined)
+                            auth-present-p))
+               (show-progress-p
+                (exercism--track-list-show-progress-p
+                 auth-present-p (exercism--plist-get track 'is_joined)))
+               (concepts (exercism--track-list-concepts-label
+                          (exercism--plist-get track 'num_learnt_concepts)
+                          (exercism--plist-get track 'num_concepts)
+                          show-progress-p))
+               (exercises (exercism--track-list-progress-label
+                           (exercism--plist-get track 'num_completed_exercises)
+                           (exercism--plist-get track 'num_exercises)
+                           show-progress-p))
+               (type-label (exercism--track-list-type-label
+                            (exercism--plist-get track 'course)))
+               (new-label (exercism--track-list-is-new-label
+                           (exercism--plist-get track 'is_new)))
+               (notify-label (exercism--track-list-notifications-label
+                              (exercism--plist-get track 'has_notifications)
+                              auth-present-p))
+               (touched-label (exercism--track-list-last-touched-label
+                               (exercism--plist-get track 'last_touched_at)))
+               (line-start (point))
+               (row-face (when (equal slug exercism--current-track)
+                           '(:weight bold))))
+          (insert (exercism--track-icon-display slug)
+                  (exercism--track-icon-separator)
+                  (propertize (format (format "%%-%ds" title-width) track-title)
+                              'face row-face)
+                  "  "
+                  (exercism--track-list-pad-label enrollment enrollment-width)
+                  "  "
+                  (exercism--track-list-pad-right concepts concepts-width)
+                  "  "
+                  (exercism--track-list-pad-right exercises exercises-width)
+                  "  "
+                  (format (format "%%-%ds" type-width) type-label)
+                  "  "
+                  (exercism--track-list-pad-label new-label new-width)
+                  "  "
+                  (exercism--track-list-pad-label notify-label notify-width)
+                  "  "
+                  (propertize (format (format "%%-%ds" touched-width) touched-label)
+                              'face row-face)
+                  "\n")
+          (add-text-properties line-start (point)
+                               `(exercism-track-slug ,slug))))
+      (goto-char (point-min))
+      (catch 'found
+        (while (not (eobp))
+          (when (get-text-property (point) 'exercism-track-slug)
+            (throw 'found t))
+          (forward-line 1))))))
+
+(defun exercism--show-track-list (tracks on-select)
+  "Cache TRACKS, render the picker, and call ON-SELECT with chosen slug."
+  (with-current-buffer (get-buffer-create exercism--track-list-buffer-name)
+    (exercism-track-list-mode)
+    (setq exercism-track-list-tracks tracks
+          exercism-track-list-on-select on-select
+          exercism-track-list-auth-present-p
+          (not (null (exercism--maybe-get-api-token))))
+    (exercism--render-track-list)
+    (exercism--prefetch-track-icons tracks)
+    (pop-to-buffer (current-buffer))))
+
 (defun exercism-exercise-list-set-track ()
   "Set the current Exercism track and reload the exercise list."
   (interactive)
@@ -567,14 +1023,16 @@ Optional FRAME cycles animation when STATE is `submitting'."
   (exercism--list-tracks
    (lambda (tracks)
      (exercism--sync-workspace-from-config)
-     (let* ((track (completing-read "Choose track: " tracks nil t))
-            (track-dir (expand-file-name track exercism--workspace)))
-       (if (file-exists-p track-dir)
-           (exercism--exercise-list-apply-track track)
-         (exercism--track-init
-          track
-          (lambda (_result)
-            (exercism--exercise-list-apply-track track))))))))
+     (exercism--show-track-list
+      tracks
+      (lambda (track)
+        (let ((track-dir (expand-file-name track exercism--workspace)))
+          (if (file-exists-p track-dir)
+              (exercism--exercise-list-apply-track track)
+            (exercism--track-init
+             track
+             (lambda (_result)
+               (exercism--exercise-list-apply-track track))))))))))
 
 (define-derived-mode exercism-exercise-list-mode special-mode "Exercism Exercises"
   "Major mode for browsing Exercism exercises."
@@ -815,6 +1273,14 @@ Optional FRAME cycles animation when STATE is `submitting'."
         ((symbolp value) (symbol-name value))
         ((numberp value) (number-to-string value))
         (t (format "%s" value))))
+
+(defun exercism--json-bool (value)
+  "Return JSON boolean VALUE as an Emacs boolean."
+  (pcase value
+    (:json-false nil)
+    (:json-true t)
+    ((guard (memq value '(nil :null))) nil)
+    (_ (not (null value)))))
 
 (defun exercism--open-exercise-slug (slug)
   "Download SLUG on the current track if needed, then open it."
