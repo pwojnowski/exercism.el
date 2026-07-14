@@ -1103,6 +1103,26 @@
      (exercism-track-list-previous)
      (should (equal "emacs-lisp" (exercism-track-list--slug-at-point))))))
 
+(ert-deftest exercism--show-track-list-displays-in-origin-window ()
+  (let ((origin-buffer (generate-new-buffer " *exercism-track-origin*"))
+        (exercism--track-icon-cache-root
+         (make-temp-file "exercism-icon-cache" 'dir)))
+    (unwind-protect
+        (progn
+          (switch-to-buffer origin-buffer)
+          (exercism--show-track-list
+           (exercism-ert--sample-tracks)
+           (lambda (_slug) nil))
+          (should
+           (eq (get-buffer exercism--track-list-buffer-name)
+               (window-buffer (selected-window)))))
+      (when (get-buffer exercism--track-list-buffer-name)
+        (kill-buffer exercism--track-list-buffer-name))
+      (when (buffer-live-p origin-buffer)
+        (kill-buffer origin-buffer))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
 (ert-deftest exercism-track-list-select-track ()
   (let ((selected nil)
         (callback-buffer nil)
@@ -1112,18 +1132,20 @@
     (unwind-protect
         (progn
           (with-current-buffer origin-buffer
-            (exercism-exercise-list-mode)
-            (exercism--show-track-list
-             (exercism-ert--sample-tracks)
-             (lambda (slug)
-               (setq selected slug
-                     callback-buffer (current-buffer)))))
+            (exercism-exercise-list-mode))
+          (switch-to-buffer origin-buffer)
+          (exercism--show-track-list
+           (exercism-ert--sample-tracks)
+           (lambda (slug)
+             (setq selected slug
+                   callback-buffer (current-buffer))))
           (with-current-buffer exercism--track-list-buffer-name
             (setq exercism-track-list-auth-present-p t)
             (exercism-ert--goto-track-slug "python")
             (exercism-track-list-select-track))
           (should (equal "python" selected))
           (should (eq origin-buffer callback-buffer))
+          (should (eq origin-buffer (window-buffer (selected-window))))
           (should (not (get-buffer exercism--track-list-buffer-name))))
       (when (get-buffer exercism--track-list-buffer-name)
         (kill-buffer exercism--track-list-buffer-name))
@@ -1265,6 +1287,29 @@
        (should (equal "python" selected))
        (should (not (get-buffer exercism--track-list-buffer-name)))))))
 
+(ert-deftest exercism-track-list-cancel-restores-origin ()
+  (let ((origin-buffer (generate-new-buffer " *exercism-cancel-test*"))
+        (exercism--track-icon-cache-root (make-temp-file "exercism-icon-cache" 'dir)))
+    (unwind-protect
+        (progn
+          (with-current-buffer origin-buffer
+            (exercism-exercise-list-mode))
+          (switch-to-buffer origin-buffer)
+          (exercism--show-track-list
+           (exercism-ert--sample-tracks)
+           (lambda (_slug) nil))
+          (should (get-buffer exercism--track-list-buffer-name))
+          (with-current-buffer exercism--track-list-buffer-name
+            (exercism-track-list-cancel))
+          (should (not (get-buffer exercism--track-list-buffer-name)))
+          (should (eq origin-buffer (window-buffer (selected-window)))))
+      (when (get-buffer exercism--track-list-buffer-name)
+        (kill-buffer exercism--track-list-buffer-name))
+      (when (buffer-live-p origin-buffer)
+        (kill-buffer origin-buffer))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
 (ert-deftest exercism-track-list-reload-key ()
   (should (eq #'exercism-track-list-reload
               (lookup-key exercism-track-list-mode-map "g"))))
@@ -1274,7 +1319,7 @@
               (lookup-key exercism-track-list-mode-map (kbd "RET")))))
 
 (ert-deftest exercism-track-list-quit-key ()
-  (should (eq #'quit-window
+  (should (eq #'exercism-track-list-cancel
               (lookup-key exercism-track-list-mode-map "q"))))
 
 (provide 'exercism-ert)

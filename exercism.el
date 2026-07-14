@@ -768,7 +768,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
   (clrhash exercism--exercise-pending-states)
   (exercism--with-track-exercises-and-solutions
    (lambda (exercises solution-status-by-slug)
-     (exercism--show-exercise-list exercises solution-status-by-slug))))
+     (exercism--show-exercise-list exercises solution-status-by-slug 'no-display))))
 
 (defun exercism--exercise-list-apply-track (track)
   "Set TRACK as current, persist state, and reload the exercise list."
@@ -795,7 +795,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
     (define-key map (kbd "n") #'exercism-track-list-next)
     (define-key map (kbd "p") #'exercism-track-list-previous)
     (define-key map (kbd "g") #'exercism-track-list-reload)
-    (define-key map (kbd "q") #'quit-window)
+    (define-key map (kbd "q") #'exercism-track-list-cancel)
     map)
   "Keymap for `exercism-track-list-mode'.")
 
@@ -810,6 +810,9 @@ Optional FRAME cycles animation when STATE is `submitting'."
 
 (defvar-local exercism-track-list-origin-buffer nil
   "Buffer from which the current track picker was opened.")
+
+(defvar-local exercism-track-list-origin-window nil
+  "Window from which the current track picker was opened.")
 
 (defvar-local exercism-track-list-auth-present-p nil
   "Non-nil when the track list was loaded with authentication.")
@@ -855,18 +858,53 @@ Optional FRAME cycles animation when STATE is `submitting'."
                      slug))
             tracks))
 
+(defun exercism-track-list--restore-origin-window (track-buffer)
+  "Show the track picker's origin buffer in TRACK-BUFFER's origin window."
+  (with-current-buffer track-buffer
+    (let ((origin-buffer exercism-track-list-origin-buffer)
+          (origin-window exercism-track-list-origin-window))
+      (when (and (window-live-p origin-window)
+                 (buffer-live-p origin-buffer))
+        (select-window origin-window)
+        (switch-to-buffer origin-buffer)))))
+
+(defun exercism-track-list--restore-origin (origin-window origin-buffer)
+  "Select ORIGIN-WINDOW and display ORIGIN-BUFFER when both are live."
+  (when (and (window-live-p origin-window)
+             (buffer-live-p origin-buffer))
+    (select-window origin-window)
+    (switch-to-buffer origin-buffer)))
+
 (defun exercism-track-list--complete-selection (track buffer)
   "Invoke the on-select callback for TRACK in its origin and close BUFFER."
-  (let ((slug (exercism--json-value (exercism--plist-get track 'slug)))
-        (callback exercism-track-list-on-select)
-        (origin-buffer exercism-track-list-origin-buffer))
+  (let* ((slug (exercism--json-value (exercism--plist-get track 'slug)))
+         (picker-state
+          (when (buffer-live-p buffer)
+            (with-current-buffer buffer
+              (list exercism-track-list-on-select
+                    exercism-track-list-origin-buffer
+                    exercism-track-list-origin-window))))
+         (callback (car picker-state))
+         (origin-buffer (cadr picker-state))
+         (origin-window (caddr picker-state)))
     (unless (buffer-live-p origin-buffer)
       (user-error "The originating Exercism exercise list buffer no longer exists"))
     (when callback
       (with-current-buffer origin-buffer
         (funcall callback slug)))
-    (when (buffer-live-p buffer)
+    (exercism-track-list--restore-origin origin-window origin-buffer)
+    (when (and buffer (buffer-live-p buffer) (not (eq buffer origin-buffer)))
       (kill-buffer buffer))))
+
+(defun exercism-track-list-cancel ()
+  "Cancel track selection and return to the exercise list."
+  (interactive)
+  (let ((track-buffer (current-buffer)))
+    (if (with-current-buffer track-buffer exercism-track-list-origin-buffer)
+        (progn
+          (exercism-track-list--restore-origin-window track-buffer)
+          (kill-buffer track-buffer))
+      (quit-window))))
 
 (defun exercism-track-list--refresh-and-verify-join (track buffer)
   "Refetch tracks and select TRACK in BUFFER if enrollment is detected."
@@ -1108,17 +1146,21 @@ Optional FRAME cycles animation when STATE is `submitting'."
 
 (defun exercism--show-track-list (tracks on-select)
   "Cache TRACKS, render the picker, and call ON-SELECT with chosen slug."
-  (let ((origin-buffer (current-buffer)))
-    (with-current-buffer (get-buffer-create exercism--track-list-buffer-name)
+  (let ((origin-buffer (current-buffer))
+        (origin-window (selected-window))
+        (track-buffer (get-buffer-create exercism--track-list-buffer-name)))
+    (with-current-buffer track-buffer
       (exercism-track-list-mode)
       (setq exercism-track-list-tracks tracks
             exercism-track-list-on-select on-select
             exercism-track-list-origin-buffer origin-buffer
+            exercism-track-list-origin-window origin-window
             exercism-track-list-auth-present-p
             (not (null (exercism--maybe-get-api-token))))
       (exercism--render-track-list)
       (exercism--prefetch-track-icons tracks)
-      (pop-to-buffer (current-buffer)))))
+      (with-selected-window origin-window
+        (switch-to-buffer track-buffer)))))
 
 (defun exercism-exercise-list-set-track ()
   "Set the current Exercism track and reload the exercise list."
@@ -1244,14 +1286,16 @@ Optional FRAME cycles animation when STATE is `submitting'."
             (throw 'found t))
           (forward-line 1))))))
 
-(defun exercism--show-exercise-list (exercises solution-status-by-slug)
-  "Cache EXERCISES and SOLUTION-STATUS-BY-SLUG, then render the list."
+(defun exercism--show-exercise-list (exercises solution-status-by-slug &optional display-p)
+  "Cache EXERCISES and SOLUTION-STATUS-BY-SLUG, then render the list.
+Pass DISPLAY-P as `no-display' to re-render without changing windows."
   (with-current-buffer (get-buffer-create exercism--exercise-list-buffer-name)
     (exercism-exercise-list-mode)
     (setq exercism-exercise-list-exercises exercises
           exercism-exercise-list-solution-status-by-slug solution-status-by-slug)
     (exercism--render-exercise-list)
-    (pop-to-buffer (current-buffer))))
+    (unless (eq display-p 'no-display)
+      (pop-to-buffer (current-buffer)))))
 
 (defun exercism--with-track-exercises-and-solutions (callback)
   "Fetch all exercises and solution statuses, then call CALLBACK."
