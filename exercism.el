@@ -481,6 +481,13 @@ Optional FRAME cycles animation when STATE is `submitting'."
    (lambda (exercises solution-status-by-slug)
      (exercism--show-exercise-list exercises solution-status-by-slug))))
 
+(defun exercism--exercise-list-apply-track (track)
+  "Set TRACK as current, persist state, and reload the exercise list."
+  (setq exercism--current-track track)
+  (exercism--save-state)
+  (message "[exercism] set current track to: %s" track)
+  (exercism-exercise-list-reload))
+
 (defun exercism-exercise-list-set-track ()
   "Set the current Exercism track and reload the exercise list."
   (interactive)
@@ -492,18 +499,11 @@ Optional FRAME cycles animation when STATE is `submitting'."
      (let* ((track (completing-read "Choose track: " tracks nil t))
             (track-dir (expand-file-name track exercism--workspace)))
        (if (file-exists-p track-dir)
-           (progn
-             (setq exercism--current-track track)
-             (exercism--save-state)
-             (message "[exercism] set current track to: %s" track)
-             (exercism-exercise-list-reload))
+           (exercism--exercise-list-apply-track track)
          (exercism--track-init
           track
           (lambda (_result)
-            (setq exercism--current-track track)
-            (exercism--save-state)
-            (message "[exercism] set current track to: %s" track)
-            (exercism-exercise-list-reload))))))))
+            (exercism--exercise-list-apply-track track))))))))
 
 (define-derived-mode exercism-exercise-list-mode special-mode "Exercism Exercises"
   "Major mode for browsing Exercism exercises."
