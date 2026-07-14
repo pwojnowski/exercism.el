@@ -159,8 +159,44 @@ directory, adopt it as the current track."
      (message "[exercism] download result for %s: %s" exercise-slug result)
      (funcall callback result))))
 
+;; GET https://exercism.org/api/v2/tracks
+;;
+;; Sample response (one track, unauthenticated):
+;;
+;;   {"tracks":[{"slug":"emacs-lisp","title":"Emacs Lisp","course":false,
+;;     "num_concepts":0,"num_exercises":86,
+;;     "web_url":"https://exercism.org/tracks/emacs-lisp",
+;;     "icon_url":"https://assets.exercism.org/tracks/emacs-lisp.svg",
+;;     "tags":["Interpreted","Functional"],"last_touched_at":null,
+;;     "is_new":false,
+;;     "links":{"self":"https://exercism.org/tracks/emacs-lisp",
+;;              "exercises":"https://exercism.org/tracks/emacs-lisp/exercises",
+;;              "concepts":"https://exercism.org/tracks/emacs-lisp/concepts"}}]}
+;;
+;; Authenticated users who have joined a track also get per-track fields:
+;; is_joined, num_learnt_concepts, num_completed_exercises,
+;; has_notifications, and a non-null last_touched_at timestamp.
+
 (defun exercism--list-tracks (callback)
-  "Call CALLBACK with a list of track slug strings."
+  "Call CALLBACK with a list of track slug strings.
+
+Uses GET https://exercism.org/api/v2/tracks.  The endpoint is public;
+authentication is optional and this function does not send auth headers.
+
+Response: a JSON object with a top-level `tracks' array.  Each track
+object always includes `slug', `title', `course', `num_concepts',
+`num_exercises', `web_url', `icon_url', `tags', `last_touched_at',
+`is_new', and `links' (with `self', `exercises', and `concepts' URLs).
+
+Without authentication, `last_touched_at' is null for every track.
+When a Bearer token or session cookie identifies a user who has joined
+a track, that track's object also includes `is_joined',
+`num_learnt_concepts', `num_completed_exercises', and
+`has_notifications', and `last_touched_at' is an ISO8601 timestamp.
+Joined tracks are listed first.
+
+Optional query params (not used here): `criteria', `tags', and `status'
+(`status' requires authentication)."
   (request "https://exercism.org/api/v2/tracks"
     :parser #'json-read
     :success (cl-function
@@ -171,8 +207,43 @@ directory, adopt it as the current track."
                                             tracks)))
                   (funcall callback track-slugs))))))
 
+;; GET https://exercism.org/api/v2/tracks/{slug}/exercises
+;;
+;; Sample response (one exercise, unauthenticated):
+;;
+;;   {"exercises":[{"slug":"hello-world","type":"tutorial","title":"Hello World",
+;;     "icon_url":"https://assets.exercism.org/exercises/hello-world.svg",
+;;     "difficulty":"easy",
+;;     "blurb":"Exercism's classic introductory exercise...",
+;;     "is_external":true,"is_unlocked":true,"is_recommended":false,
+;;     "links":{"self":"/tracks/emacs-lisp/exercises/hello-world"}}]}
+;;
+;; Exercise `type' is `tutorial', `concept', or `practice'.  `difficulty' is
+;; `easy', `medium', or `hard'.
+;;
+;; Without authentication, `is_external' is true, `is_unlocked' is true for
+;; every exercise, and `is_recommended' is false.  With authentication on a
+;; joined track, `is_unlocked' reflects progress, `is_recommended' marks at
+;; most one next exercise, and `is_external' is false.
+;;
+;; Optional query params (not used here): `criteria' (search), `sideload'
+;; (e.g. `sideload=solutions' adds a `solutions' array when authenticated).
+
 (defun exercism--list-exercises (track-slug only-unlocked-p callback)
-  "Call CALLBACK with exercise plists for TRACK-SLUG."
+  "Call CALLBACK with exercise plists for TRACK-SLUG.
+
+Uses GET https://exercism.org/api/v2/tracks/{slug}/exercises.  The endpoint
+is public; authentication is optional and this function does not send auth
+headers.
+
+CALLBACK receives the `exercises' array from the response, optionally
+filtered to unlocked exercises when ONLY-UNLOCKED-P is non-nil.  Each
+exercise plist includes `slug', `type', `title', `icon_url', `difficulty',
+`blurb', `is_external', `is_unlocked', `is_recommended', and `links'.
+
+Without authentication, every exercise has `is_unlocked' set to true, so
+ONLY-UNLOCKED-P has no effect unless auth headers are added later.
+Authenticated users on a joined track get accurate `is_unlocked' values."
   (request (format "https://exercism.org/api/v2/tracks/%s/exercises" track-slug)
     :parser #'json-read
     :success (cl-function
