@@ -1597,13 +1597,26 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
   (not (seq-find (lambda (result) (not (nth 1 result)))
                  (exercism--sync-self-check-results))))
 
+(defvar exercism-self-check-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "g") #'exercism-self-check)
+    (define-key map (kbd "c") #'exercism-configure)
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Keymap for `exercism-self-check-mode'.")
+
+(define-derived-mode exercism-self-check-mode special-mode "Exercism Self-Check"
+  "Major mode for the Exercism setup self-check report."
+  (setq buffer-read-only t))
+
 (defun exercism--self-check-buffer ()
   "Return the `*exercism-self-check*' buffer, creating it if needed."
-  (or (get-buffer "*exercism-self-check*")
-      (let ((buf (generate-new-buffer "*exercism-self-check*")))
-        (with-current-buffer buf
-          (special-mode))
-        buf)))
+  (let ((buf (or (get-buffer "*exercism-self-check*")
+                 (generate-new-buffer "*exercism-self-check*"))))
+    (with-current-buffer buf
+      (unless (derived-mode-p 'exercism-self-check-mode)
+        (exercism-self-check-mode)))
+    buf))
 
 (defun exercism--self-check-line (label ok-p &optional detail)
   "Format one self-check result line for LABEL, OK-P, and optional DETAIL."
@@ -1624,6 +1637,7 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
         (erase-buffer)
         (insert "Exercism Self-Check\n")
         (insert "===================\n\n")
+        (insert "g rerun | c configure | q quit\n\n")
         (insert (if overall-ok
                     (propertize "Overall: configured and reachable\n\n"
                                 'face 'success)

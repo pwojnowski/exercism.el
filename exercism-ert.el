@@ -1551,5 +1551,36 @@
       (when (get-buffer "*exercism-self-check*")
         (kill-buffer "*exercism-self-check*")))))
 
+(ert-deftest exercism-self-check-mode-activation ()
+  (unwind-protect
+      (progn
+        (exercism-ert--run-self-check-without-async)
+        (with-current-buffer "*exercism-self-check*"
+          (should (derived-mode-p 'exercism-self-check-mode))))
+    (when (get-buffer "*exercism-self-check*")
+      (kill-buffer "*exercism-self-check*"))))
+
+(ert-deftest exercism-self-check-rerun-key ()
+  (should (eq #'exercism-self-check
+              (lookup-key exercism-self-check-mode-map "g"))))
+
+(ert-deftest exercism-self-check-quit-key ()
+  (should (eq #'quit-window
+              (lookup-key exercism-self-check-mode-map "q"))))
+
+(ert-deftest exercism-self-check-configure-key ()
+  (should (eq #'exercism-configure
+              (lookup-key exercism-self-check-mode-map "c"))))
+
+(ert-deftest exercism-self-check-shows-key-help ()
+  (unwind-protect
+      (progn
+        (exercism-ert--run-self-check-without-async)
+        (with-current-buffer "*exercism-self-check*"
+          (should (string-match-p "g rerun | c configure | q quit"
+                                  (buffer-string)))))
+    (when (get-buffer "*exercism-self-check*")
+      (kill-buffer "*exercism-self-check*"))))
+
 (provide 'exercism-ert)
 ;;; exercism-ert.el ends here
