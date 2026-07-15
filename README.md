@@ -27,7 +27,7 @@ Download the `exercism` CLI by following [the official guide](https://exercism.o
   :bind (("C-c x" . exercism)))
 ```
 
-Invoke `M-x exercism` or `C-c x` to open the exercise list for the current track.
+Invoke `M-x exercism` or `C-c x` to open the exercise list for the current track. On first use, if setup is incomplete, the self-check report opens automatically; if setup is complete but no track is selected, the track picker opens instead.
 
 ## Configure
 
@@ -94,7 +94,7 @@ Marking an exercise as complete still happens on the Exercism website.
 
 ## Self-Check
 
-`?` or `M-x exercism-self-check` verifies CLI setup, config, token, workspace, and API connectivity.
+`?` or `M-x exercism-self-check` verifies CLI setup, config, token, workspace, and API connectivity. It also opens automatically when you run `C-c x` or `M-x exercism` before Exercism is configured locally.
 
 ## Testing
 

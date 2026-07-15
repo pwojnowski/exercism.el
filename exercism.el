@@ -42,6 +42,9 @@
   :type 'file
   :group 'exercism)
 
+(defconst exercism--min-cli-version "3.2.0"
+  "Minimum Exercism CLI version required by exercism.el.")
+
 (defvar exercism--state-file
   (expand-file-name "exercism-state.el" user-emacs-directory)
   "File persisting the current track, exercise, and workspace.")
@@ -1162,27 +1165,36 @@ Optional FRAME cycles animation when STATE is `submitting'."
       (with-selected-window origin-window
         (switch-to-buffer track-buffer)))))
 
+(defun exercism--apply-track-selection (track on-ready)
+  "Ensure TRACK exists locally, then call ON-READY with TRACK."
+  (let ((track-dir (expand-file-name track exercism--workspace)))
+    (if (file-exists-p track-dir)
+        (funcall on-ready track)
+      (exercism--track-init
+       track
+       (lambda (_result)
+         (funcall on-ready track))))))
+
+(defun exercism--prompt-for-track (on-select)
+  "Fetch tracks, show the picker, and call ON-SELECT with the chosen slug."
+  (exercism--list-tracks
+   (lambda (tracks)
+     (exercism--sync-workspace-from-config)
+     (exercism--show-track-list tracks on-select))))
+
 (defun exercism-exercise-list-set-track ()
   "Set the current Exercism track and reload the exercise list."
   (interactive)
   (unless (derived-mode-p 'exercism-exercise-list-mode)
     (user-error "Not in Exercism exercise list buffer"))
   (let ((exercise-list-buffer (current-buffer)))
-    (exercism--list-tracks
-     (lambda (tracks)
-       (exercism--sync-workspace-from-config)
-       (exercism--show-track-list
-        tracks
-        (lambda (track)
-          (let ((track-dir (expand-file-name track exercism--workspace)))
-            (if (file-exists-p track-dir)
-                (exercism--exercise-list-apply-track-in-buffer
-                 track exercise-list-buffer)
-              (exercism--track-init
-               track
-               (lambda (_result)
-                 (exercism--exercise-list-apply-track-in-buffer
-                  track exercise-list-buffer)))))))))))
+    (exercism--prompt-for-track
+     (lambda (track)
+       (exercism--apply-track-selection
+        track
+        (lambda (_track)
+          (exercism--exercise-list-apply-track-in-buffer
+           track exercise-list-buffer)))))))
 
 (define-derived-mode exercism-exercise-list-mode special-mode "Exercism Exercises"
   "Major mode for browsing Exercism exercises."
@@ -1308,12 +1320,33 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
       (lambda (solution-status-by-slug)
         (funcall callback exercises solution-status-by-slug))))))
 
-(defun exercism ()
-  "Open the Exercism exercise list for the current track."
-  (interactive)
+(defun exercism--open-exercise-list ()
+  "Fetch exercises for the current track and show the exercise list."
   (exercism--with-track-exercises-and-solutions
    (lambda (exercises solution-status-by-slug)
      (exercism--show-exercise-list exercises solution-status-by-slug))))
+
+(defun exercism--select-track-and-open-exercises (track)
+  "Set TRACK as current and open the exercise list."
+  (setq exercism--current-track track)
+  (exercism--save-state)
+  (message "[exercism] set current track to: %s" track)
+  (exercism--open-exercise-list))
+
+(defun exercism ()
+  "Open the Exercism exercise list for the current track."
+  (interactive)
+  (cond
+   ((not (exercism--setup-ok-p))
+    (message "[exercism] setup incomplete — running self-check")
+    (exercism-self-check))
+   (exercism--current-track
+    (exercism--open-exercise-list))
+   (t
+    (exercism--prompt-for-track
+     (lambda (track)
+       (exercism--apply-track-selection
+        track #'exercism--select-track-and-open-exercises))))))
 
 (defun exercism--get-config (exercise-dir)
   "Return the parsed config alist for EXERCISE-DIR."
@@ -1497,6 +1530,25 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
               (when (string-match "exercism version \\([0-9.]+\\)" result)
                 (match-string 1 result))))))
 
+(defun exercism--cli-version-self-check-result ()
+  "Return a self-check result for the installed CLI version."
+  (let ((label (format "CLI version (min %s)" exercism--min-cli-version))
+        (exe (or (executable-find exercism-executable)
+                 (when (file-executable-p exercism-executable)
+                   exercism-executable))))
+    (if (not exe)
+        (list label nil "executable not found")
+      (let ((output (shell-command-to-string
+                      (concat (shell-quote-argument exercism-executable)
+                              " version"))))
+        (if (string-match "exercism version \\([0-9.]+\\)" output)
+            (let ((version (match-string 1 output)))
+              (if (exercism--compare-semvers version #'< exercism--min-cli-version)
+                  (list label nil
+                        (format "%s (below min %s)" version exercism--min-cli-version))
+                (list label t version)))
+          (list label nil (string-trim output)))))))
+
 (defvar exercism--self-check-results nil
   "Accumulator for `exercism-self-check' result lines.")
 
@@ -1512,6 +1564,38 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
         (concat (substring token 0 4)
                 (make-string (- len 8) ?*)
                 (substring token -4))))))
+
+(defun exercism--sync-self-check-results ()
+  "Return a list of (LABEL OK-P DETAIL) for local setup checks."
+  (let* ((exe (or (executable-find exercism-executable)
+                  (when (file-executable-p exercism-executable)
+                    exercism-executable)))
+         (user-config (exercism--read-user-config))
+         (token (when user-config (alist-get 'token user-config)))
+         (workspace (or (when user-config (alist-get 'workspace user-config))
+                        exercism--workspace))
+         (results
+          (list
+           (list "CLI executable" (not (null exe)) (or exe exercism-executable))
+           (list "Config file"
+                 (file-exists-p exercism-config-path)
+                 exercism-config-path)
+           (list "API token configured"
+                 (and token (not (string-empty-p token)))
+                 (if token
+                     (exercism--masked-token token)
+                   "missing from config")))))
+    (if workspace
+        (append results
+                (list (list "Workspace directory"
+                            (file-directory-p workspace)
+                            workspace)))
+      results)))
+
+(defun exercism--setup-ok-p ()
+  "Return non-nil when local Exercism setup passes sync checks."
+  (not (seq-find (lambda (result) (not (nth 1 result)))
+                 (exercism--sync-self-check-results))))
 
 (defun exercism--self-check-buffer ()
   "Return the `*exercism-self-check*' buffer, creating it if needed."
@@ -1579,38 +1663,20 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
         exercism--self-check-pending 0)
   (pop-to-buffer (exercism--self-check-buffer))
   (exercism--self-check-render)
-  (let* ((exe (or (executable-find exercism-executable)
-                  (when (file-executable-p exercism-executable)
-                    exercism-executable)))
-         (user-config (exercism--read-user-config))
-         (token (when user-config (alist-get 'token user-config)))
-         (workspace (or (when user-config (alist-get 'workspace user-config))
-                        exercism--workspace)))
-    (exercism--self-check-add "CLI executable" (not (null exe)) (or exe exercism-executable))
-    (exercism--self-check-add "Config file"
-                              (file-exists-p exercism-config-path)
-                              exercism-config-path)
-    (exercism--self-check-add "API token configured"
-                              (and token (not (string-empty-p token)))
-                              (if token
-                                  (exercism--masked-token token)
-                                "missing from config"))
-    (when workspace
-      (exercism--self-check-add "Workspace directory"
-                                (file-directory-p workspace)
-                                workspace))
+  (let ((sync-results (exercism--sync-self-check-results)))
+    (when sync-results
+      (apply #'exercism--self-check-add (car sync-results))
+      (apply #'exercism--self-check-add (exercism--cli-version-self-check-result))
+      (dolist (result (cdr sync-results))
+        (apply #'exercism--self-check-add result))))
+  (when (exercism--setup-ok-p)
+    (exercism--self-check-add "State file"
+                              (file-exists-p exercism--state-file)
+                              exercism--state-file)
     (when exercism--current-track
       (exercism--self-check-add "Current track" t exercism--current-track))
     (when exercism--current-exercise
       (exercism--self-check-add "Current exercise" t exercism--current-exercise)))
-  (exercism--self-check-async
-   "CLI version"
-   (lambda ()
-     (let ((output (shell-command-to-string
-                    (concat (shell-quote-argument exercism-executable) " version"))))
-       (if (string-match "exercism version \\([0-9.]+\\)" output)
-           (cons t (match-string 1 output))
-         (cons nil (string-trim output))))))
   (setq exercism--self-check-pending (1+ exercism--self-check-pending))
   (request "https://exercism.org/api/v2/tracks"
     :parser #'json-read
@@ -1651,18 +1717,17 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
   "Run Exercism CLI tests in EXERCISE-DIR."
   (exercism--cli-version
    (lambda (version)
-     (let ((min-version "3.2.0"))
-       (cond
-        ((not version)
-         (message "[exercism] error: could not determine CLI version"))
-        ((exercism--compare-semvers version #'< min-version)
-         (message "[exercism] error: running tests requires CLI %s+ (you have %s)"
-                  min-version version))
-        (t
-         (let* ((default-directory exercise-dir)
-                (compile-command (concat (shell-quote-argument exercism-executable)
-                                         " test")))
-           (compile compile-command))))))))
+     (cond
+      ((not version)
+       (message "[exercism] error: could not determine CLI version"))
+      ((exercism--compare-semvers version #'< exercism--min-cli-version)
+       (message "[exercism] error: running tests requires CLI %s+ (you have %s)"
+                exercism--min-cli-version version))
+      (t
+       (let* ((default-directory exercise-dir)
+              (compile-command (concat (shell-quote-argument exercism-executable)
+                                       " test")))
+         (compile compile-command)))))))
 
 (defun exercism--run-tests-for-slug (slug)
   "Run tests for SLUG on `exercism--current-track'."

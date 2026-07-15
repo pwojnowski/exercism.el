@@ -1322,5 +1322,234 @@
   (should (eq #'exercism-track-list-cancel
               (lookup-key exercism-track-list-mode-map "q"))))
 
+(defun exercism-ert--write-user-config (config-file workspace &optional token)
+  "Write Exercism user config to CONFIG-FILE."
+  (write-region
+   (json-encode `((workspace . ,workspace)
+                  (token . ,(or token "test-token"))))
+   nil config-file))
+
+(defun exercism-ert--make-fake-cli ()
+  "Return a temporary executable used as the Exercism CLI in tests."
+  (let ((path (make-temp-file "exercism-cli" nil ".sh")))
+    (write-region "#!/bin/sh\n" nil path)
+    (chmod path #o755)
+    path))
+
+(defun exercism-ert--make-fake-cli-with-version (version)
+  "Return a temporary Exercism CLI executable reporting VERSION."
+  (let ((path (make-temp-file "exercism-cli" nil ".sh")))
+    (write-region
+     (format "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then echo \"exercism version %s\"; fi\n"
+             version)
+     nil path)
+    (chmod path #o755)
+    path))
+
+(defun exercism-ert--with-valid-setup (config-file workspace body)
+  "Run BODY with a valid local Exercism setup using CONFIG-FILE and WORKSPACE."
+  (exercism-ert--write-user-config config-file workspace)
+  (let ((exercism-executable (exercism-ert--make-fake-cli)))
+    (unwind-protect
+        (let ((exercism-config-path config-file)
+              (exercism--workspace workspace))
+          (when (boundp 'exercism--api-token)
+            (makunbound 'exercism--api-token))
+          (funcall body))
+      (when (file-exists-p exercism-executable)
+        (delete-file exercism-executable)))))
+
+(defvar exercism-ert--self-check-called nil)
+
+(defun exercism-ert--self-check-recorder (&rest _args)
+  "Advice that records calls to `exercism-self-check'."
+  (setq exercism-ert--self-check-called t))
+
+(defvar exercism-ert--prompt-for-track-called nil)
+
+(defun exercism-ert--prompt-for-track-recorder (_on-select)
+  "Advice that records calls to `exercism--prompt-for-track'."
+  (setq exercism-ert--prompt-for-track-called t))
+
+(ert-deftest exercism--setup-ok-p-valid-config ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir)))
+    (unwind-protect
+        (exercism-ert--with-valid-setup config-file workspace
+         (lambda ()
+           (should (exercism--setup-ok-p))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t)))))
+
+(ert-deftest exercism--setup-ok-p-missing-token ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir))
+         (cli (exercism-ert--make-fake-cli)))
+    (unwind-protect
+        (progn
+          (exercism-ert--write-user-config config-file workspace "")
+          (let ((exercism-config-path config-file)
+                (exercism-executable cli)
+                (exercism--workspace workspace))
+            (when (boundp 'exercism--api-token)
+              (makunbound 'exercism--api-token))
+            (should-not (exercism--setup-ok-p))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t))
+      (when (file-exists-p cli) (delete-file cli)))))
+
+(ert-deftest exercism--setup-ok-p-missing-config ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir))
+         (cli (exercism-ert--make-fake-cli)))
+    (unwind-protect
+        (progn
+          (delete-file config-file)
+          (let ((exercism-config-path config-file)
+                (exercism-executable cli)
+                (exercism--workspace workspace))
+            (when (boundp 'exercism--api-token)
+              (makunbound 'exercism--api-token))
+            (should-not (exercism--setup-ok-p))))
+      (when (file-exists-p workspace) (delete-directory workspace t))
+      (when (file-exists-p cli) (delete-file cli)))))
+
+(ert-deftest exercism-starts-self-check-when-unconfigured ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (cli (exercism-ert--make-fake-cli)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'exercism-self-check)
+                   #'exercism-ert--self-check-recorder))
+          (write-region "{}" nil config-file)
+          (setq exercism-ert--self-check-called nil
+                exercism--current-track nil)
+          (when (boundp 'exercism--api-token)
+            (makunbound 'exercism--api-token))
+          (let ((exercism-config-path config-file)
+                (exercism-executable cli))
+            (exercism)
+            (should exercism-ert--self-check-called)
+            (should-not (get-buffer exercism--exercise-list-buffer-name))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p cli) (delete-file cli))
+      (when (get-buffer exercism--exercise-list-buffer-name)
+        (kill-buffer exercism--exercise-list-buffer-name)))))
+
+(ert-deftest exercism-starts-track-picker-when-no-track ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'exercism--prompt-for-track)
+                   #'exercism-ert--prompt-for-track-recorder))
+          (setq exercism-ert--prompt-for-track-called nil
+                exercism--current-track nil)
+          (exercism-ert--with-valid-setup config-file workspace
+           (lambda ()
+             (exercism)
+             (should exercism-ert--prompt-for-track-called)
+             (should-not (get-buffer exercism--exercise-list-buffer-name)))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t))
+      (when (get-buffer exercism--exercise-list-buffer-name)
+        (kill-buffer exercism--exercise-list-buffer-name)))))
+
+(defun exercism-ert--run-self-check-without-async ()
+  "Run `exercism-self-check' without network or background threads."
+  (cl-letf (((symbol-function 'exercism--self-check-async) #'ignore)
+            ((symbol-function 'request) #'ignore))
+    (exercism-self-check)))
+
+(ert-deftest exercism-self-check-hides-track-when-setup-fails ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir))
+         (cli (exercism-ert--make-fake-cli)))
+    (unwind-protect
+        (progn
+          (delete-file config-file)
+          (let ((exercism-config-path config-file)
+                (exercism-executable cli)
+                (exercism--workspace workspace)
+                (exercism--current-track "go")
+                (exercism--current-exercise "hello-world"))
+            (when (boundp 'exercism--api-token)
+              (makunbound 'exercism--api-token))
+            (exercism-ert--run-self-check-without-async)
+            (with-current-buffer "*exercism-self-check*"
+              (should-not (string-match-p "State file" (buffer-string)))
+              (should-not (string-match-p "Current track" (buffer-string)))
+              (should-not (string-match-p "Current exercise" (buffer-string))))))
+      (when (file-exists-p workspace) (delete-directory workspace t))
+      (when (file-exists-p cli) (delete-file cli))
+      (when (get-buffer "*exercism-self-check*")
+        (kill-buffer "*exercism-self-check*")))))
+
+(ert-deftest exercism-self-check-shows-track-when-setup-ok ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir)))
+    (unwind-protect
+        (exercism-ert--with-valid-setup config-file workspace
+         (lambda ()
+           (setq exercism--current-track "go"
+                 exercism--current-exercise "hello-world")
+           (exercism-ert--run-self-check-without-async)
+           (with-current-buffer "*exercism-self-check*"
+             (let ((content (buffer-string)))
+               (should (string-match-p (regexp-quote exercism--state-file) content))
+               (should (string-match-p "Current track: go" content))
+               (should (string-match-p "Current exercise: hello-world" content))
+               (should (< (string-match "State file" content)
+                          (string-match "Current track" content)))))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t))
+      (when (get-buffer "*exercism-self-check*")
+        (kill-buffer "*exercism-self-check*")))))
+
+(ert-deftest exercism--cli-version-self-check-result ()
+  (let ((exercism-executable (exercism-ert--make-fake-cli-with-version "3.5.8")))
+    (unwind-protect
+        (let ((result (exercism--cli-version-self-check-result)))
+          (should (string= (format "CLI version (min %s)" exercism--min-cli-version)
+                           (nth 0 result)))
+          (should (nth 1 result))
+          (should (string= "3.5.8" (nth 2 result))))
+      (when (file-exists-p exercism-executable)
+        (delete-file exercism-executable)))))
+
+(ert-deftest exercism--cli-version-self-check-result-below-min ()
+  (let ((exercism-executable (exercism-ert--make-fake-cli-with-version "3.1.0")))
+    (unwind-protect
+        (let ((result (exercism--cli-version-self-check-result)))
+          (should-not (nth 1 result))
+          (should (string-match-p "below min" (nth 2 result))))
+      (when (file-exists-p exercism-executable)
+        (delete-file exercism-executable)))))
+
+(ert-deftest exercism-self-check-cli-version-after-executable ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir))
+         (cli (exercism-ert--make-fake-cli-with-version "3.5.8")))
+    (unwind-protect
+        (exercism-ert--with-valid-setup config-file workspace
+         (lambda ()
+           (let ((exercism-executable cli))
+             (exercism-ert--run-self-check-without-async)
+             (with-current-buffer "*exercism-self-check*"
+               (let* ((content (buffer-string))
+                      (executable-pos (string-match "CLI executable" content))
+                      (version-pos (string-match "CLI version (min" content))
+                      (config-pos (string-match "Config file" content)))
+                 (should executable-pos)
+                 (should version-pos)
+                 (should config-pos)
+                 (should (< executable-pos version-pos))
+                 (should (< version-pos config-pos))
+                 (should (string-match-p "CLI version (min 3.2.0): 3.5.8"
+                                         content)))))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t))
+      (when (file-exists-p cli) (delete-file cli))
+      (when (get-buffer "*exercism-self-check*")
+        (kill-buffer "*exercism-self-check*")))))
+
 (provide 'exercism-ert)
 ;;; exercism-ert.el ends here
