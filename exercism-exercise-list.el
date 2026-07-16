@@ -330,7 +330,9 @@ Optional FRAME cycles animation when STATE is `submitting'."
   "Insert track and exercise count summary for EXERCISES using COUNTS."
   (let ((solved-count (car counts))
         (unsolved-count (cadr counts)))
-    (insert (format "Track: %s\n" exercism--current-track))
+    (insert (exercism--track-icon-display exercism--current-track)
+            " "
+            (format "Track: %s\n" exercism--current-track))
     (insert (format "Exercises: %d | Solved: %d | Unsolved: %d\n\n"
                     (length exercises)
                     solved-count unsolved-count))))

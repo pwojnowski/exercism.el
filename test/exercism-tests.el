@@ -43,13 +43,17 @@
 
 (defun exercism-ert--with-exercise-list (exercises solutions body)
   "Show exercise list in a temp buffer and run BODY there."
-  (unwind-protect
-      (let ((exercism--current-track "emacs-lisp"))
-        (exercism--show-exercise-list exercises solutions)
-        (with-current-buffer exercism--exercise-list-buffer-name
-          (funcall body)))
-    (when (get-buffer exercism--exercise-list-buffer-name)
-      (kill-buffer exercism--exercise-list-buffer-name))))
+  (let ((exercism--track-icon-cache-root
+         (make-temp-file "exercism-icon-cache" 'dir)))
+    (unwind-protect
+        (let ((exercism--current-track "emacs-lisp"))
+          (exercism--show-exercise-list exercises solutions)
+          (with-current-buffer exercism--exercise-list-buffer-name
+            (funcall body)))
+      (when (get-buffer exercism--exercise-list-buffer-name)
+        (kill-buffer exercism--exercise-list-buffer-name))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
 
 (defun exercism-ert--goto-exercise-slug (slug)
   "Move point to the exercise row for SLUG in the current buffer."
@@ -446,6 +450,25 @@
               (should (string-match-p "secret-handshake" content)))))
       (when (get-buffer exercism--exercise-list-buffer-name)
         (kill-buffer exercism--exercise-list-buffer-name)))))
+
+(ert-deftest exercism-exercise-list-summary-includes-track-icon ()
+  (exercism-ert--with-exercise-list
+   (exercism-ert--sample-exercises)
+   (exercism-ert--make-solution-table
+    '(("hello-world" . "published")
+      ("two-fer" . "started")
+      ("bob" . nil)))
+   (lambda ()
+     (let ((icon (substring-no-properties
+                  (exercism--track-icon-display "emacs-lisp")))
+           (line (progn
+                   (goto-char (point-min))
+                   (search-forward "Track: emacs-lisp")
+                   (buffer-substring-no-properties
+                    (line-beginning-position)
+                    (line-end-position)))))
+       (should (string-prefix-p icon line))
+       (should (string-match-p "Track: emacs-lisp\\'" line))))))
 
 (ert-deftest exercism-exercise-list-orders-solved-last-stably ()
   (exercism-ert--with-exercise-list
