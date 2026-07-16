@@ -1,14 +1,18 @@
+[![MELPA](https://melpa.org/packages/exercism-badge.svg)](https://melpa.org/#/exercism)
+
 # exercism.el
 
 Emacs integration for [Exercism](https://exercism.org) via the Exercism CLI.
 
 ## Requirements
 
+- Download the `exercism` CLI by following [the official guide](https://exercism.org/cli-walkthrough).
 - Emacs 29.1+
 - [request](https://github.com/tkf/emacs-request) 0.3.2+
 - [Exercism CLI](https://exercism.org/cli-walkthrough) 3.2.0+
 
 ## Install
+Install from MELPA or manually:
 
 ```emacs-lisp
 (use-package request

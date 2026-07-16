@@ -4,11 +4,10 @@
 ;; Copyright (C) 2026 Przemysław Wojnowski
 ;; SPDX-License-Identifier: GPL-3.0-or-later
 ;;
-;; Author: Przemysław Wojnowski <esperanto@defun.tech>
-;; Maintainer: Przemysław Wojnowski <esperanto@defun.tech>
+;; Author: Rafael Nicdao
 ;; Version: 1.0.0
 ;; Keywords: exercism, convenience
-;; Homepage: https://github.com/pwojnowski/exercism.el
+;; Homepage: https://github.com/anonimitoraf/exercism.el
 ;; Package-Requires: ((emacs "29.1") (request "0.3.2"))
 
 ;;; Commentary:
