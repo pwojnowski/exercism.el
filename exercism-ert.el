@@ -1760,5 +1760,94 @@
     (when (get-buffer "*exercism-self-check*")
       (kill-buffer "*exercism-self-check*"))))
 
+(ert-deftest exercism-track-list-initial-point ()
+  "Characterize: render leaves point on the first track row."
+  (exercism-ert--with-track-list
+   (exercism-ert--sample-tracks) nil
+   (lambda ()
+     (should (equal "emacs-lisp"
+                    (get-text-property (point) 'exercism-track-slug))))))
+
+(ert-deftest exercism--submit-pending-set-starts-animation ()
+  "Characterize: submitting state starts animation and updates the row."
+  (unwind-protect
+      (exercism-ert--with-exercise-list
+       (list '((slug . "bob")
+               (difficulty . "easy")
+               (blurb . "Bob says hi")
+               (is_unlocked . t)))
+       (exercism-ert--make-solution-table nil)
+       (lambda ()
+         (exercism--submit-pending-set "bob" 'submitting)
+         (should (eq 'submitting (gethash "bob" exercism--exercise-pending-states)))
+         (should (timerp exercism--submit-animation-timer))
+         (let ((line (buffer-substring-no-properties
+                      (car (exercism-exercise-list--line-for-slug "bob"))
+                      (cdr (exercism-exercise-list--line-for-slug "bob")))))
+           (should (string-match-p "submitting" line)))))
+    (exercism--submit-animation-stop)
+    (clrhash exercism--exercise-pending-states)))
+
+(ert-deftest exercism--self-check-done-decrements-pending ()
+  "Characterize: each async completion decrements pending and messages at zero."
+  (let ((exercism--self-check-pending 2)
+        (messages nil))
+    (cl-letf (((symbol-function 'message)
+               (lambda (fmt &rest args)
+                 (push (apply #'format fmt args) messages))))
+      (exercism--self-check-done)
+      (should (= 1 exercism--self-check-pending))
+      (should (null messages))
+      (exercism--self-check-done)
+      (should (zerop exercism--self-check-pending))
+      (should (equal '("[exercism] self-check complete — see *exercism-self-check*")
+                     messages)))))
+
+(ert-deftest exercism--load-then-reconcile-order ()
+  "Characterize: load-state then reconcile clears stale track/exercise."
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (state-file (make-temp-file "exercism-state" nil ".el"))
+         (workspace (make-temp-file "exercism-workspace" 'dir))
+         (go-dir (expand-file-name "go" workspace)))
+    (unwind-protect
+        (progn
+          (make-directory go-dir t)
+          (write-region
+           (json-encode `((workspace . ,workspace) (token . "test-token")))
+           nil config-file)
+          (write-region
+           (format "(setq exercism--current-track %S\n      exercism--current-exercise %S\n      exercism--workspace %S)\n"
+                   "emacs-lisp" "hello-world" "/tmp/stale-workspace")
+           nil state-file)
+          (cl-letf ((exercism-config-path config-file)
+                    (exercism--state-file state-file))
+            (setq exercism--current-track "stale"
+                  exercism--current-exercise "stale-ex"
+                  exercism--workspace "/tmp/other")
+            (exercism--load-state)
+            (should (equal "emacs-lisp" exercism--current-track))
+            (should (equal "hello-world" exercism--current-exercise))
+            (exercism--reconcile-state-with-config)
+            (should (equal "go" exercism--current-track))
+            (should (null exercism--current-exercise))
+            (should (string= exercism--workspace workspace))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p state-file) (delete-file state-file))
+      (when (file-exists-p workspace) (delete-directory workspace t)))))
+
+(ert-deftest exercism--order-exercises-stable-partition ()
+  "Characterize: unsolved keep relative order; solved follow stably."
+  (let* ((exercises (exercism-ert--sample-exercises))
+         (solutions (exercism-ert--make-solution-table
+                     '(("hello-world" . "published")
+                       ("two-fer" . "started")
+                       ("bob" . nil))))
+         (ordered (exercism--order-exercises exercises solutions)))
+    (should (equal '("two-fer" "secret-handshake" "bob" "hello-world")
+                   (mapcar (lambda (ex)
+                             (exercism--json-value
+                              (exercism--plist-get ex 'slug)))
+                           ordered)))))
+
 (provide 'exercism-ert)
 ;;; exercism-ert.el ends here
