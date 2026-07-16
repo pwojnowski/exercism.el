@@ -77,14 +77,16 @@ First selection of a new track may download `hello-world`.
 
 ## Testing
 
+Install [Eldev](https://emacs-eldev.github.io/eldev/) once:
+
 ```bash
-./scripts/run-exercism-ert.sh
+curl -fsSL https://raw.github.com/emacs-eldev/eldev/master/webinstall/eldev | sh
 ```
 
-Override the Emacs package dir if needed:
+Then run the suite (dependencies install into `.eldev/` on first run):
 
 ```bash
-EMACS_USER_DIR=~/.emacs.d ./scripts/run-exercism-ert.sh
+eldev test
 ```
 
 ## Limitations

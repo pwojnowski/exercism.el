@@ -1,0 +1,11 @@
+; -*- mode: emacs-lisp; lexical-binding: t -*-
+
+(eldev-use-package-archive 'gnu)
+(eldev-use-package-archive 'melpa)
+
+;; Isolate developer/CLI state before project load.
+;; `defvar' in exercism-core.el will not overwrite a bound value.
+;; Without this, load-time `exercism--reconcile-state-with-config'
+;; can write the real `exercism-state.el' during local `eldev test'.
+(setq exercism--state-file
+      (make-temp-file "exercism-eldev-state" nil ".el"))

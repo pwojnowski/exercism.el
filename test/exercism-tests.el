@@ -1,9 +1,9 @@
-;;; exercism-ert.el --- ERT tests for exercism.el -*- lexical-binding: t; -*-
+;;; exercism-tests.el --- ERT tests for exercism.el -*- lexical-binding: t; -*-
 
 ;;; Commentary:
 
 ;; Unit tests for pure helpers in `exercism.el'.
-;; Run via ./scripts/run-exercism-ert.sh or M-x ert after loading this file.
+;; Run via `eldev test' or M-x ert after loading this file.
 
 ;;; Code:
 
@@ -1849,5 +1849,5 @@
                               (exercism--plist-get ex 'slug)))
                            ordered)))))
 
-(provide 'exercism-ert)
-;;; exercism-ert.el ends here
+(provide 'exercism-tests)
+;;; exercism-tests.el ends here

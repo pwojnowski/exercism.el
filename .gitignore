@@ -1,3 +1,4 @@
 repl.el
 *.elc
+.eldev/
 .DS_Store
