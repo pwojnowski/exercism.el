@@ -1,4 +1,5 @@
 [![MELPA](https://melpa.org/packages/exercism-badge.svg)](https://melpa.org/#/exercism)
+[![CI](https://github.com/anonimitoraf/exercism.el/actions/workflows/test.yml/badge.svg)](https://github.com/anonimitoraf/exercism.el/actions/workflows/test.yml)
 
 # exercism.el
 
