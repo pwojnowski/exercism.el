@@ -31,17 +31,19 @@ Invoke `M-x exercism` or `C-c x` to open the exercise list for the current track
 
 ## Configure
 
-[Get your API token](https://exercism.org/settings/api_cli) and run `M-x exercism-configure`.
+[Get your API token](https://exercism.org/settings/api_cli) and run `M-x exercism-configure`. You will be prompted for your API token and workspace directory (defaulting to a saved workspace, or `~/Exercism`).
 
 ### Path Configuration
 
-Before customizing `exercism--workspace`, change it on the CLI first:
+`M-x exercism-configure` writes the chosen workspace to the Exercism CLI config via `--workspace`. To change it later, run configure again or use:
 
 ```bash
-exercism -w "path/to/dir"
+exercism configure --workspace "path/to/dir"
 ```
 
 #### no-littering
+
+Pick your no-littering directory when prompted during `M-x exercism-configure`, or set it in Emacs after configuring on the CLI:
 
 ```emacs-lisp
 (setq exercism--workspace (no-littering-expand-var-file-name "exercism/"))

@@ -329,6 +329,74 @@
       (when (file-exists-p state-file)
         (delete-file state-file)))))
 
+(ert-deftest exercism--workspace-from-state-missing ()
+  (let ((state-file (make-temp-file "exercism-state" nil ".el")))
+    (unwind-protect
+        (cl-letf ((exercism--state-file state-file))
+          (delete-file state-file)
+          (should (null (exercism--workspace-from-state))))
+      (when (file-exists-p state-file)
+        (delete-file state-file)))))
+
+(ert-deftest exercism--workspace-from-state-present ()
+  (let ((state-file (make-temp-file "exercism-state" nil ".el"))
+        (workspace "/tmp/exercism-saved-workspace"))
+    (unwind-protect
+        (cl-letf ((exercism--state-file state-file))
+          (setq exercism--current-track "go"
+                exercism--current-exercise "hello-world"
+                exercism--workspace workspace)
+          (exercism--save-state)
+          (setq exercism--current-track "emacs-lisp"
+                exercism--current-exercise "two-fer"
+                exercism--workspace "/tmp/other-workspace")
+          (should (string= (exercism--workspace-from-state) workspace))
+          (should (string= exercism--current-track "emacs-lisp"))
+          (should (string= exercism--current-exercise "two-fer"))
+          (should (string= exercism--workspace "/tmp/other-workspace")))
+      (when (file-exists-p state-file)
+        (delete-file state-file)))))
+
+(ert-deftest exercism--workspace-configure-default-prefers-state ()
+  (let ((state-file (make-temp-file "exercism-state" nil ".el"))
+        (workspace "/tmp/exercism-configure-default"))
+    (unwind-protect
+        (cl-letf ((exercism--state-file state-file))
+          (setq exercism--workspace workspace)
+          (exercism--save-state)
+          (should (string= (exercism--workspace-configure-default) workspace)))
+      (when (file-exists-p state-file)
+        (delete-file state-file)))))
+
+(ert-deftest exercism--workspace-configure-default-fallback ()
+  (let ((state-file (make-temp-file "exercism-state" nil ".el")))
+    (unwind-protect
+        (cl-letf ((exercism--state-file state-file))
+          (delete-file state-file)
+          (should (string= (exercism--workspace-configure-default)
+                           exercism--default-workspace)))
+      (when (file-exists-p state-file)
+        (delete-file state-file)))))
+
+(ert-deftest exercism--configure-includes-workspace ()
+  (let ((config-file (make-temp-file "exercism-user" nil ".json"))
+        (workspace (make-temp-file "exercism-workspace" 'dir)))
+    (unwind-protect
+        (progn
+          (write-region "{}" nil config-file)
+          (cl-letf ((exercism-config-path config-file))
+            (advice-add #'exercism--run-shell-command :around
+                        #'exercism-ert--run-shell-command-recorder)
+            (exercism--configure "test-token" workspace)
+            (should (string-match-p "--workspace" exercism-ert--submit-command))
+            (should (string-match-p (regexp-quote workspace)
+                                    exercism-ert--submit-command))
+            (should (string-match-p "--token" exercism-ert--submit-command))))
+      (advice-remove #'exercism--run-shell-command
+                     #'exercism-ert--run-shell-command-recorder)
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t)))))
+
 (ert-deftest exercism--reconcile-state-with-config-stale-workspace ()
   (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
          (state-file (make-temp-file "exercism-state" nil ".el"))
@@ -1569,8 +1637,118 @@
               (lookup-key exercism-self-check-mode-map "q"))))
 
 (ert-deftest exercism-self-check-configure-key ()
-  (should (eq #'exercism-configure
+  (should (eq #'exercism-self-check-configure
               (lookup-key exercism-self-check-mode-map "c"))))
+
+(ert-deftest exercism-self-check-track-key ()
+  (should (eq #'exercism-self-check-select-track
+              (lookup-key exercism-self-check-mode-map "t"))))
+
+(ert-deftest exercism-self-check-exercises-key ()
+  (should (eq #'exercism-self-check-open-exercises
+              (lookup-key exercism-self-check-mode-map "e"))))
+
+(ert-deftest exercism--self-check-key-help-base ()
+  (let ((config-file (make-temp-file "exercism-user" nil ".json"))
+        (workspace (make-temp-file "exercism-workspace" 'dir))
+        (cli (exercism-ert--make-fake-cli)))
+    (unwind-protect
+        (progn
+          (delete-file config-file)
+          (let ((exercism-config-path config-file)
+                (exercism-executable cli)
+                (exercism--workspace workspace))
+            (when (boundp 'exercism--api-token)
+              (makunbound 'exercism--api-token))
+            (should (string= "g rerun | c configure | q quit"
+                             (exercism--self-check-key-help)))))
+      (when (file-exists-p workspace) (delete-directory workspace t))
+      (when (file-exists-p cli) (delete-file cli)))))
+
+(ert-deftest exercism--self-check-key-help-configured ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir)))
+    (unwind-protect
+        (exercism-ert--with-valid-setup config-file workspace
+         (lambda ()
+           (setq exercism--current-track nil)
+           (should (string= "g rerun | c configure | q quit | t track"
+                            (exercism--self-check-key-help)))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t)))))
+
+(ert-deftest exercism--self-check-key-help-with-track ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir)))
+    (unwind-protect
+        (exercism-ert--with-valid-setup config-file workspace
+         (lambda ()
+           (setq exercism--current-track "go")
+           (should (string= "g rerun | c configure | q quit | t track | e exercises"
+                            (exercism--self-check-key-help)))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t)))))
+
+(ert-deftest exercism-self-check-shows-track-key-when-setup-ok ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir)))
+    (unwind-protect
+        (exercism-ert--with-valid-setup config-file workspace
+         (lambda ()
+           (setq exercism--current-track nil)
+           (exercism-ert--run-self-check-without-async)
+           (with-current-buffer "*exercism-self-check*"
+             (should (string-match-p "| t track" (buffer-string)))
+             (should-not (string-match-p "| e exercises" (buffer-string))))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t))
+      (when (get-buffer "*exercism-self-check*")
+        (kill-buffer "*exercism-self-check*")))))
+
+(ert-deftest exercism-self-check-shows-exercises-key-with-track ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (workspace (make-temp-file "exercism-workspace" 'dir)))
+    (unwind-protect
+        (exercism-ert--with-valid-setup config-file workspace
+         (lambda ()
+           (setq exercism--current-track "go")
+           (exercism-ert--run-self-check-without-async)
+           (with-current-buffer "*exercism-self-check*"
+             (should (string-match-p "| t track" (buffer-string)))
+             (should (string-match-p "| e exercises" (buffer-string))))))
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t))
+      (when (get-buffer "*exercism-self-check*")
+        (kill-buffer "*exercism-self-check*")))))
+
+(ert-deftest exercism--configure-after-callback ()
+  (let ((config-file (make-temp-file "exercism-user" nil ".json"))
+        (workspace (make-temp-file "exercism-workspace" 'dir))
+        (called nil))
+    (unwind-protect
+        (progn
+          (write-region "{}" nil config-file)
+          (cl-letf ((exercism-config-path config-file))
+            (advice-add #'exercism--run-shell-command :around
+                        #'exercism-ert--run-shell-command-immediate)
+            (exercism--configure "test-token" workspace
+                                 (lambda () (setq called t)))
+            (should called)))
+      (advice-remove #'exercism--run-shell-command
+                     #'exercism-ert--run-shell-command-immediate)
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p workspace) (delete-directory workspace t)))))
+
+(ert-deftest exercism--self-check-show-pending ()
+  (unwind-protect
+      (progn
+        (exercism--self-check-show-pending "Configuring... (please wait)")
+        (with-current-buffer "*exercism-self-check*"
+          (should (derived-mode-p 'exercism-self-check-mode))
+          (goto-char (point-min))
+          (should (search-forward "Configuring... (please wait)" nil t))))
+    (when (get-buffer "*exercism-self-check*")
+      (kill-buffer "*exercism-self-check*"))))
 
 (ert-deftest exercism-self-check-shows-key-help ()
   (unwind-protect

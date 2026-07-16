@@ -49,12 +49,14 @@
   (expand-file-name "exercism-state.el" user-emacs-directory)
   "File persisting the current track, exercise, and workspace.")
 
+(defconst exercism--default-workspace
+  (expand-file-name "~/Exercism")
+  "Default Exercism workspace directory (matches the CLI default).")
+
 (defvar exercism--api-token)
 (defvar exercism--current-track nil)
 (defvar exercism--current-exercise nil)
-(defvar exercism--workspace
-  (expand-file-name
-   (if (eq system-type 'darwin) "~/Exercism" "~/exercism"))
+(defvar exercism--workspace exercism--default-workspace
   "Root directory for downloaded Exercism exercises.")
 
 (defun exercism--save-state ()
@@ -69,6 +71,25 @@
   "Load persisted state from `exercism--state-file'."
   (when (file-exists-p exercism--state-file)
     (load exercism--state-file nil t)))
+
+(defun exercism--workspace-from-state ()
+  "Return workspace from `exercism--state-file' without changing live state."
+  (when (file-exists-p exercism--state-file)
+    (let ((track exercism--current-track)
+          (exercise exercism--current-exercise)
+          (workspace exercism--workspace)
+          (loaded nil))
+      (load exercism--state-file nil t)
+      (setq loaded exercism--workspace
+            exercism--current-track track
+            exercism--current-exercise exercise
+            exercism--workspace workspace)
+      (when loaded
+        (expand-file-name loaded)))))
+
+(defun exercism--workspace-configure-default ()
+  "Return the default workspace directory for `exercism-configure'."
+  (or (exercism--workspace-from-state) exercism--default-workspace))
 
 (defun exercism--read-user-config ()
   "Return parsed Exercism user config alist, or nil on error."
@@ -138,23 +159,43 @@ directory, adopt it as the current track."
         (alist-get sym plist nil nil #'equal)
         (alist-get key plist nil nil #'equal))))
 
-(defun exercism--configure (api-token)
-  "Configure the Exercism CLI with API-TOKEN."
-  (setq exercism--api-token api-token)
+(defun exercism--configure (api-token workspace &optional after-callback)
+  "Configure the Exercism CLI with API-TOKEN and WORKSPACE.
+When AFTER-CALLBACK is provided, invoke it after configuration succeeds."
+  (setq exercism--api-token api-token
+        exercism--workspace (expand-file-name workspace))
+  (message "[exercism] configuring... (please wait)")
+  (when (get-buffer-window (exercism--self-check-buffer) t)
+    (exercism--self-check-show-pending "Configuring... (please wait)"))
   (exercism--run-shell-command
    (concat (shell-quote-argument exercism-executable)
            " configure"
-           " --token " (shell-quote-argument exercism--api-token))
+           " --token " (shell-quote-argument exercism--api-token)
+           " --workspace " (shell-quote-argument exercism--workspace))
    (lambda (result)
      (message "[exercism] configure: %s" result)
      (exercism--sync-workspace-from-config)
      (when (file-exists-p exercism-config-path)
-       (exercism--save-state)))))
+       (exercism--save-state))
+     (when after-callback
+       (funcall after-callback)))))
+
+(defun exercism--configure-interactive (&optional after-callback)
+  "Prompt for Exercism setup values and run `exercism--configure'.
+When AFTER-CALLBACK is provided, invoke it after configuration succeeds."
+  (let* ((api-token (read-string "API token: "))
+         (default-workspace (exercism--workspace-configure-default))
+         (workspace (expand-file-name
+                     (read-directory-name "Workspace directory: "
+                                          default-workspace
+                                          default-workspace
+                                          nil))))
+    (exercism--configure api-token workspace after-callback)))
 
 (defun exercism-configure ()
   "Configure the Exercism CLI."
   (interactive)
-  (exercism--configure (read-string "API token: ")))
+  (exercism--configure-interactive))
 
 (defun exercism--download-exercise (exercise-slug track-slug callback)
   "Download EXERCISE-SLUG for TRACK-SLUG, then call CALLBACK with CLI output."
@@ -1599,8 +1640,10 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
 
 (defvar exercism-self-check-mode-map
   (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "c") #'exercism-self-check-configure)
     (define-key map (kbd "g") #'exercism-self-check)
-    (define-key map (kbd "c") #'exercism-configure)
+    (define-key map (kbd "t") #'exercism-self-check-select-track)
+    (define-key map (kbd "e") #'exercism-self-check-open-exercises)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `exercism-self-check-mode'.")
@@ -1627,6 +1670,28 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
         (format "  %s %s: %s" mark label detail)
       (format "  %s %s" mark label))))
 
+(defun exercism--self-check-key-help ()
+  "Return key help for the self-check buffer."
+  (let ((help "g rerun | c configure | q quit"))
+    (when (exercism--setup-ok-p)
+      (setq help (concat help " | t track")))
+    (when (and (exercism--setup-ok-p) exercism--current-track)
+      (setq help (concat help " | e exercises")))
+    help))
+
+(defun exercism--self-check-show-pending (status)
+  "Show STATUS as the interim self-check report while async work runs."
+  (with-current-buffer (exercism--self-check-buffer)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (insert "Exercism Self-Check\n")
+      (insert "===================\n\n")
+      (insert (exercism--self-check-key-help))
+      (insert "\n\n")
+      (insert (propertize status 'face 'warning))
+      (insert "\n")
+      (goto-char (point-min)))))
+
 (defun exercism--self-check-render ()
   "Redraw the self-check buffer from `exercism--self-check-results'."
   (let* ((results (reverse exercism--self-check-results))
@@ -1637,7 +1702,8 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
         (erase-buffer)
         (insert "Exercism Self-Check\n")
         (insert "===================\n\n")
-        (insert "g rerun | c configure | q quit\n\n")
+        (insert (exercism--self-check-key-help))
+        (insert "\n\n")
         (insert (if overall-ok
                     (propertize "Overall: configured and reachable\n\n"
                                 'face 'success)
@@ -1669,6 +1735,36 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
                     (lambda ()
                       (exercism--self-check-add label (car result) (cdr result))
                       (exercism--self-check-done)))))))
+
+(defun exercism-self-check-configure ()
+  "Configure Exercism from the self-check buffer, then refresh the report."
+  (interactive)
+  (exercism--configure-interactive #'exercism-self-check))
+
+(defun exercism-self-check-select-track ()
+  "Open the track picker from the self-check buffer."
+  (interactive)
+  (unless (exercism--setup-ok-p)
+    (user-error "Configure Exercism first (`c`)"))
+  (exercism--prompt-for-track
+   (lambda (track)
+     (exercism--apply-track-selection
+      track
+      (lambda (selected-track)
+        (setq exercism--current-track selected-track)
+        (exercism--save-state)
+        (message "[exercism] set current track to: %s" selected-track)
+        (when (get-buffer-window (exercism--self-check-buffer) t)
+          (exercism-self-check)))))))
+
+(defun exercism-self-check-open-exercises ()
+  "Open the exercise list from the self-check buffer."
+  (interactive)
+  (unless (exercism--setup-ok-p)
+    (user-error "Configure Exercism first (`c`)"))
+  (unless exercism--current-track
+    (user-error "Select a track first (`t`)"))
+  (exercism--open-exercise-list))
 
 (defun exercism-self-check ()
   "Verify Exercism CLI setup and API connectivity, then show a report."
