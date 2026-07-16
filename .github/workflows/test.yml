@@ -24,10 +24,10 @@ jobs:
           version: ${{matrix.emacs_version}}
 
       - name: Install Eldev
-        uses: emacs-eldev/setup-eldev@v1
+        uses: emacs-eldev/setup-eldev@v1.5
 
       - name: Check out the source code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Test the project
         run: |
