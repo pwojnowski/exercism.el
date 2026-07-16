@@ -116,17 +116,68 @@ Optional FRAME cycles animation when STATE is `submitting'."
     (define-key map (kbd "d") #'exercism-download-all-unlocked-exercises)
     (define-key map (kbd "t") #'exercism-exercise-list-set-track)
     (define-key map (kbd "c") #'exercism-configure)
+    (define-key map (kbd "C") #'exercism-self-check)
     (define-key map (kbd "s") #'exercism-exercise-list-submit-exercise)
     (define-key map (kbd "r") #'exercism-exercise-list-run-tests)
-    (define-key map (kbd "S") #'exercism-exercise-list-submit-then-open-in-browser)
     (define-key map (kbd "b") #'exercism-exercise-list-open-in-browser)
-    (define-key map (kbd "?") #'exercism-self-check)
+    (define-key map (kbd "?") #'exercism-exercise-list-show-help)
     (define-key map (kbd "q") #'quit-window)
     map)
   "Keymap for `exercism-exercise-list-mode'.")
 
 (defconst exercism-exercise-list-title "Exercism Exercises"
   "Title shown in the exercise list buffer.")
+
+(defconst exercism-exercise-list-key-help
+  "RET open | s submit | r test | b browser | d download all | t track"
+  "Short key help shown in the exercise list heading.")
+
+(defconst exercism-exercise-list-full-key-help
+  "\
+Exercism Exercises — keys
+
+RET  Open exercise (download if needed)
+s    Submit
+r    Run tests
+b    Open in browser
+d    Download all unlocked
+t    Track picker
+
+n/p  Next / previous
+g    Reload
+c    Configure
+C    Self-check
+q    Quit
+
+?    This help"
+  "Full key help shown by `exercism-exercise-list-show-help'.")
+
+(defvar exercism--exercise-list-help-buffer-name "*Exercism Exercises Help*"
+  "Buffer name for exercise list key help.")
+
+(defvar exercism-exercise-list-help-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "q") #'quit-window)
+    map)
+  "Keymap for `exercism-exercise-list-help-mode'.")
+
+(define-derived-mode exercism-exercise-list-help-mode special-mode
+  "Exercism Exercises Help"
+  "Major mode for the Exercism exercise list key help buffer."
+  (setq buffer-read-only t))
+
+(defun exercism-exercise-list-show-help ()
+  "Show the full exercise list keybinding help in a buffer."
+  (interactive)
+  (let ((buf (get-buffer-create exercism--exercise-list-help-buffer-name)))
+    (with-current-buffer buf
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert exercism-exercise-list-full-key-help)
+        (insert "\n")
+        (goto-char (point-min)))
+      (exercism-exercise-list-help-mode))
+    (pop-to-buffer buf)))
 
 (defvar-local exercism-exercise-list-exercises nil
   "Cached exercise plists for the current exercise list buffer.")
@@ -324,7 +375,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
   "Insert the exercise list title and key help."
   (exercism--list-insert-heading
    exercism-exercise-list-title
-   "RET open | b browser | s submit | S submit+browser | r test | d download all | n/p move | g reload | t track | c configure | ? self-check | q quit"))
+   exercism-exercise-list-key-help))
 
 (defun exercism--ensure-current-track-icon ()
   "Fetch the current track icon when missing, then refresh the exercise list."

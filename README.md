@@ -40,22 +40,24 @@ To change the workspace later, run configure again or `exercism configure --work
 
 ### Exercise list
 
+Heading shows the common keys: `RET` open, `s` submit, `r` test, `b` browser, `d` download all, `t` track. Press `?` for the full list.
+
 | Key | Action |
 |-----|--------|
 | `RET` | Open exercise (download if needed) |
-| `b` | Open exercise in browser |
 | `s` | Submit |
-| `S` | Submit, then open submission in browser |
 | `r` | Run tests (`*compilation*`) |
+| `b` | Open exercise in browser |
 | `d` | Download all unlocked exercises |
+| `t` | Track picker |
 | `n` / `p` | Next / previous |
 | `g` | Reload |
-| `t` | Track picker |
 | `c` | Configure |
-| `?` | Self-check |
+| `C` | Self-check |
+| `?` | Key help |
 | `q` | Quit |
 
-Unsolved exercises keep API order, then solved. While submitting, Status shows `submitting`, then `submitted` or `failed`. Press `g` to refresh from the API. Marking complete is done on the website.
+Unsolved exercises keep API order, then solved. While submitting, Status shows `submitting`, then `submitted` or `failed`. Press `g` to refresh from the API. Marking complete is done on the website. `M-x exercism-submit-then-open-in-browser` still submits and opens the browser in one step.
 
 ### Track list
 
@@ -70,7 +72,7 @@ First selection of a new track may download `hello-world`.
 
 ### Self-check
 
-`M-x exercism-self-check` (or `?`) checks CLI, config, token, workspace, and API.
+`M-x exercism-self-check` (or `C` in the exercise list) checks CLI, config, token, workspace, and API.
 
 | Key | Action |
 |-----|--------|

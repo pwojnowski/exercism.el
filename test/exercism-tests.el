@@ -786,6 +786,50 @@
 (ert-deftest exercism-exercise-list-unsolved-toggle-key-removed ()
   (should-not (lookup-key exercism-exercise-list-mode-map "u")))
 
+(ert-deftest exercism-exercise-list-key-help-short ()
+  (should (equal "RET open | s submit | r test | b browser | d download all | t track"
+                 exercism-exercise-list-key-help)))
+
+(ert-deftest exercism-exercise-list-shows-short-key-help ()
+  (exercism-ert--with-exercise-list
+   (exercism-ert--sample-exercises)
+   (exercism-ert--make-solution-table nil)
+   (lambda ()
+     (let ((text (buffer-string)))
+       (should (string-match-p
+                "RET open | s submit | r test | b browser | d download all | t track"
+                text))
+       (should-not (string-match-p "submit\\+browser" text))
+       (should-not (string-match-p "self-check" text))))))
+
+(ert-deftest exercism-exercise-list-help-key ()
+  (should (eq #'exercism-exercise-list-show-help
+              (lookup-key exercism-exercise-list-mode-map "?"))))
+
+(ert-deftest exercism-exercise-list-self-check-key ()
+  (should (eq #'exercism-self-check
+              (lookup-key exercism-exercise-list-mode-map "C"))))
+
+(ert-deftest exercism-exercise-list-submit-then-open-key-removed ()
+  (should-not (lookup-key exercism-exercise-list-mode-map "S")))
+
+(ert-deftest exercism-exercise-list-show-help ()
+  (unwind-protect
+      (progn
+        (exercism-exercise-list-show-help)
+        (with-current-buffer "*Exercism Exercises Help*"
+          (should (derived-mode-p 'special-mode))
+          (let ((text (buffer-string)))
+            (should (string-match-p "RET\\s-+Open exercise" text))
+            (should (string-match-p "s\\s-+Submit" text))
+            (should (string-match-p "C\\s-+Self-check" text))
+            (should (string-match-p "c\\s-+Configure" text))
+            (should (string-match-p "g\\s-+Reload" text))
+            (should (string-match-p "q\\s-+Quit" text))
+            (should (string-match-p "\\?\\s-+This help" text)))))
+    (when (get-buffer "*Exercism Exercises Help*")
+      (kill-buffer "*Exercism Exercises Help*"))))
+
 (ert-deftest exercism--primary-solution-file ()
   (let* ((exercise-dir (make-temp-file "exercism-exercise" 'dir))
          (solution-file (expand-file-name "hello.el" exercise-dir)))
