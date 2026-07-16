@@ -46,10 +46,12 @@
   (let ((exercism--track-icon-cache-root
          (make-temp-file "exercism-icon-cache" 'dir)))
     (unwind-protect
-        (let ((exercism--current-track "emacs-lisp"))
-          (exercism--show-exercise-list exercises solutions)
-          (with-current-buffer exercism--exercise-list-buffer-name
-            (funcall body)))
+        (cl-letf (((symbol-function 'exercism--ensure-current-track-icon)
+                   (lambda (&rest _) nil)))
+          (let ((exercism--current-track "emacs-lisp"))
+            (exercism--show-exercise-list exercises solutions)
+            (with-current-buffer exercism--exercise-list-buffer-name
+              (funcall body))))
       (when (get-buffer exercism--exercise-list-buffer-name)
         (kill-buffer exercism--exercise-list-buffer-name))
       (when (file-exists-p exercism--track-icon-cache-root)
@@ -469,6 +471,74 @@
                     (line-end-position)))))
        (should (string-prefix-p icon line))
        (should (string-match-p "Track: emacs-lisp\\'" line))))))
+
+(ert-deftest exercism--ensure-current-track-icon-skips-when-cached ()
+  (let* ((exercism--track-icon-cache-root
+          (make-temp-file "exercism-icon-cache" 'dir))
+         (exercism--current-track "go")
+         (path (exercism--track-icon-cache-path "go"))
+         (fetch-called nil))
+    (unwind-protect
+        (progn
+          (with-temp-file path
+            (insert "<svg></svg>"))
+          (cl-letf (((symbol-function 'exercism--fetch-track-icon)
+                     (lambda (&rest _)
+                       (setq fetch-called t))))
+            (exercism--ensure-current-track-icon)
+            (should (not fetch-called))))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
+(ert-deftest exercism--ensure-current-track-icon-fetches-and-rerenders ()
+  (let* ((exercism--track-icon-cache-root
+          (make-temp-file "exercism-icon-cache" 'dir))
+         (exercism--current-track "go")
+         (fetched nil)
+         (render-count 0))
+    (unwind-protect
+        (progn
+          (with-current-buffer
+              (get-buffer-create exercism--exercise-list-buffer-name)
+            (exercism-exercise-list-mode))
+          (cl-letf (((symbol-function 'exercism--fetch-track-icon)
+                     (lambda (slug icon-url callback)
+                       (setq fetched (list slug icon-url))
+                       (funcall callback "/tmp/go.svg")))
+                    ((symbol-function 'exercism--render-exercise-list)
+                     (lambda ()
+                       (setq render-count (1+ render-count)))))
+            (exercism--ensure-current-track-icon)
+            (should (equal fetched
+                           '("go" "https://assets.exercism.org/tracks/go.svg")))
+            (should (= 1 render-count))))
+      (when (get-buffer exercism--exercise-list-buffer-name)
+        (kill-buffer exercism--exercise-list-buffer-name))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
+
+(ert-deftest exercism--ensure-current-track-icon-ignores-failed-fetch ()
+  (let ((exercism--track-icon-cache-root
+         (make-temp-file "exercism-icon-cache" 'dir))
+        (exercism--current-track "go")
+        (render-count 0))
+    (unwind-protect
+        (progn
+          (with-current-buffer
+              (get-buffer-create exercism--exercise-list-buffer-name)
+            (exercism-exercise-list-mode))
+          (cl-letf (((symbol-function 'exercism--fetch-track-icon)
+                     (lambda (_slug _icon-url callback)
+                       (funcall callback nil)))
+                    ((symbol-function 'exercism--render-exercise-list)
+                     (lambda ()
+                       (setq render-count (1+ render-count)))))
+            (exercism--ensure-current-track-icon)
+            (should (= 0 render-count))))
+      (when (get-buffer exercism--exercise-list-buffer-name)
+        (kill-buffer exercism--exercise-list-buffer-name))
+      (when (file-exists-p exercism--track-icon-cache-root)
+        (delete-directory exercism--track-icon-cache-root t)))))
 
 (ert-deftest exercism-exercise-list-orders-solved-last-stably ()
   (exercism-ert--with-exercise-list

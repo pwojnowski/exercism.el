@@ -326,6 +326,20 @@ Optional FRAME cycles animation when STATE is `submitting'."
    exercism-exercise-list-title
    "RET open | b browser | s submit | S submit+browser | r test | d download all | n/p move | g reload | t track | c configure | ? self-check | q quit"))
 
+(defun exercism--ensure-current-track-icon ()
+  "Fetch the current track icon when missing, then refresh the exercise list."
+  (when-let ((slug exercism--current-track))
+    (unless (exercism--svg-file-p (exercism--track-icon-cache-path slug))
+      (exercism--fetch-track-icon
+       slug
+       (format "https://assets.exercism.org/tracks/%s.svg" slug)
+       (lambda (path)
+         (when path
+           (when-let ((buffer (get-buffer exercism--exercise-list-buffer-name)))
+             (with-current-buffer buffer
+               (when (derived-mode-p 'exercism-exercise-list-mode)
+                 (exercism--render-exercise-list))))))))))
+
 (defun exercism--exercise-list-insert-summary (exercises counts)
   "Insert track and exercise count summary for EXERCISES using COUNTS."
   (let ((solved-count (car counts))
@@ -409,7 +423,8 @@ Optional FRAME cycles animation when STATE is `submitting'."
             exercise (gethash slug solution-status-by-slug))
            state-width difficulty-width slug-width)))
       (setq exercism-exercise-list-state-width state-width)
-      (exercism--list-goto-first-row 'exercism-exercise-slug))))
+      (exercism--list-goto-first-row 'exercism-exercise-slug)
+      (exercism--ensure-current-track-icon))))
 
 (defun exercism--show-exercise-list (exercises solution-status-by-slug &optional display-p)
   "Cache EXERCISES and SOLUTION-STATUS-BY-SLUG, then render the list.
