@@ -15,6 +15,7 @@
 
 (declare-function exercism--self-check-buffer "exercism-self-check")
 (declare-function exercism--self-check-show-pending "exercism-self-check")
+(declare-function exercism--exercise-downloaded-p "exercism-exercise-list")
 
 (defun exercism--cli-error-p (output)
   "Return non-nil if CLI OUTPUT is an error message."
@@ -24,13 +25,34 @@
   "Return non-nil if CLI OUTPUT says the target already exists."
   (string-match-p "already exists" output))
 
+(defun exercism--cli-rate-limited-p (output)
+  "Return non-nil if CLI OUTPUT indicates an HTTP rate limit."
+  (string-match-p "\\(?:429\\|rate limit\\|too many requests\\)"
+                  (downcase output)))
+
+(defun exercism--download-succeeded-p (exit-code output exercise-dir)
+  "Return non-nil when download EXIT-CODE, OUTPUT, and EXERCISE-DIR succeed."
+  (and (zerop exit-code)
+       (not (exercism--cli-error-p output))
+       (exercism--exercise-downloaded-p exercise-dir)))
+
 (defun exercism--run-shell-command (shell-cmd &optional callback)
   "Run SHELL-CMD asynchronously, calling CALLBACK with the output."
+  (exercism--run-shell-command-with-status
+   shell-cmd
+   (lambda (_exit-code output)
+     (when callback
+       (funcall callback output)))))
+
+(defun exercism--run-shell-command-with-status (shell-cmd &optional callback)
+  "Run SHELL-CMD asynchronously, calling CALLBACK with exit code and output."
   (make-thread
    (lambda ()
-     (let ((result (shell-command-to-string shell-cmd)))
-       (when callback
-         (run-at-time 0 nil callback result))))))
+     (with-temp-buffer
+       (let* ((exit-code (call-process-shell-command shell-cmd nil t))
+              (output (buffer-string)))
+         (when callback
+           (run-at-time 0 nil callback exit-code output)))))))
 
 (defun exercism--cli-executable-path ()
   "Return the resolved Exercism CLI executable path, or nil."
@@ -120,16 +142,19 @@ When AFTER-CALLBACK is provided, invoke it after configuration succeeds."
   (interactive)
   (exercism--configure-interactive))
 
-(defun exercism--download-exercise (exercise-slug track-slug callback)
-  "Download EXERCISE-SLUG for TRACK-SLUG, then call CALLBACK with CLI output."
-  (exercism--run-shell-command
+(defun exercism--download-exercise (exercise-slug track-slug callback &optional force)
+  "Download EXERCISE-SLUG for TRACK-SLUG, then call CALLBACK.
+CALLBACK is called as (CALLBACK EXIT-CODE OUTPUT). When FORCE is non-nil,
+pass --force to overwrite an existing exercise directory."
+  (exercism--run-shell-command-with-status
    (concat (shell-quote-argument exercism-executable)
            " download"
            " --exercise=" (shell-quote-argument exercise-slug)
-           " --track=" (shell-quote-argument track-slug))
-   (lambda (result)
+           " --track=" (shell-quote-argument track-slug)
+           (if force " --force" ""))
+   (lambda (exit-code result)
      (message "[exercism] download result for %s: %s" exercise-slug result)
-     (funcall callback result))))
+     (funcall callback exit-code result))))
 
 (defun exercism--build-submit-command (solution-files)
   "Return a shell command that submits SOLUTION-FILES with the Exercism CLI."
@@ -147,15 +172,18 @@ When AFTER-CALLBACK is provided, invoke it after configuration succeeds."
   (let ((hello-world-dir (expand-file-name "hello-world"
                                            (expand-file-name track-slug
                                                              exercism--workspace))))
-    (if (file-directory-p hello-world-dir)
+    (if (exercism--exercise-downloaded-p hello-world-dir)
         (funcall callback "hello-world already present")
       (message "[exercism] initializing %s... (please wait)" track-slug)
-      (exercism--download-exercise "hello-world" track-slug
-                                     (lambda (result)
-                                       (when (and (exercism--cli-error-p result)
-                                                  (not (exercism--cli-already-exists-p result)))
-                                         (user-error "%s" (string-trim result)))
-                                       (funcall callback result))))))
+      (exercism--download-exercise
+       "hello-world" track-slug
+       (lambda (exit-code result)
+         (when (and (or (not (zerop exit-code))
+                        (exercism--cli-error-p result))
+                    (not (exercism--cli-already-exists-p result)))
+           (user-error "%s" (string-trim result)))
+         (funcall callback result))
+       (file-directory-p hello-world-dir)))))
 
 (provide 'exercism-cli)
 ;;; exercism-cli.el ends here

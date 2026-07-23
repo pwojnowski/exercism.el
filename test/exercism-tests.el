@@ -84,13 +84,13 @@
 
 (defvar exercism-ert--find-file-target nil)
 
-(defun exercism-ert--download-exercise-recorder (orig exercise-slug track-slug callback)
+(defun exercism-ert--download-exercise-recorder (orig exercise-slug track-slug callback &optional force)
   "Advice that records download args and simulates success."
-  (setq exercism-ert--download-args (list exercise-slug track-slug))
+  (setq exercism-ert--download-args (list exercise-slug track-slug force))
   (let ((exercise-dir (expand-file-name exercise-slug
                                         (expand-file-name track-slug exercism--workspace))))
     (exercism-ert--write-minimal-exercise exercise-dir)
-    (funcall callback "Downloaded")))
+    (funcall callback 0 "Downloaded")))
 
 (defvar exercism-ert--download-args nil)
 
@@ -170,6 +170,79 @@
 (ert-deftest exercism--cli-already-exists-p ()
   (should (exercism--cli-already-exists-p "directory already exists"))
   (should (not (exercism--cli-already-exists-p "Download complete"))))
+
+(ert-deftest exercism--cli-rate-limited-p ()
+  (should (exercism--cli-rate-limited-p "Error: 429 Too Many Requests"))
+  (should (exercism--cli-rate-limited-p "rate limit exceeded"))
+  (should (exercism--cli-rate-limited-p "Error: too many requests"))
+  (should-not (exercism--cli-rate-limited-p "Downloaded exercise"))
+  (should-not (exercism--cli-rate-limited-p "Error: token invalid")))
+
+(ert-deftest exercism--download-succeeded-p ()
+  (let ((exercise-dir (make-temp-file "exercism-dl-ok" 'dir)))
+    (unwind-protect
+        (progn
+          (exercism-ert--write-minimal-exercise exercise-dir)
+          (should (exercism--download-succeeded-p 0 "Downloaded" exercise-dir))
+          (should-not (exercism--download-succeeded-p 1 "Downloaded" exercise-dir))
+          (should-not (exercism--download-succeeded-p 0 "Error: boom" exercise-dir)))
+      (when (file-exists-p exercise-dir)
+        (delete-directory exercise-dir t))))
+  (let ((stub (make-temp-file "exercism-dl-stub" 'dir)))
+    (unwind-protect
+        (should-not (exercism--download-succeeded-p 0 "Downloaded" stub))
+      (when (file-exists-p stub)
+        (delete-directory stub t)))))
+
+(ert-deftest exercism--download-exercise-force-flag ()
+  (let ((exercism-executable "exercism")
+        (captured nil))
+    (cl-letf (((symbol-function 'exercism--run-shell-command-with-status)
+               (lambda (shell-cmd &optional callback)
+                 (setq captured shell-cmd)
+                 (when callback (funcall callback 0 "ok")))))
+      (exercism--download-exercise "two-fer" "go" #'ignore t)
+      (should (string-match-p "--force" captured))
+      (exercism--download-exercise "two-fer" "go" #'ignore)
+      (should-not (string-match-p "--force" captured)))))
+
+(ert-deftest exercism--exercise-downloaded-p-missing-dir ()
+  (should-not (exercism--exercise-downloaded-p
+               (expand-file-name "no-such-exercise"
+                                 (make-temp-file "exercism-missing" 'dir)))))
+
+(ert-deftest exercism--exercise-downloaded-p-metadata-only ()
+  (let ((exercise-dir (make-temp-file "exercism-stub" 'dir)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".exercism" exercise-dir) t)
+          (write-region "{\"track\":\"go\",\"exercise\":\"stub\"}"
+                        nil
+                        (expand-file-name ".exercism/metadata.json" exercise-dir))
+          (should-not (exercism--exercise-downloaded-p exercise-dir)))
+      (when (file-exists-p exercise-dir)
+        (delete-directory exercise-dir t)))))
+
+(ert-deftest exercism--exercise-downloaded-p-config-without-solution ()
+  (let ((exercise-dir (make-temp-file "exercism-incomplete" 'dir)))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".exercism" exercise-dir) t)
+          (write-region "{\"files\":{\"solution\":[\"missing.el\"]}}"
+                        nil
+                        (expand-file-name ".exercism/config.json" exercise-dir))
+          (should-not (exercism--exercise-downloaded-p exercise-dir)))
+      (when (file-exists-p exercise-dir)
+        (delete-directory exercise-dir t)))))
+
+(ert-deftest exercism--exercise-downloaded-p-complete ()
+  (let ((exercise-dir (make-temp-file "exercism-complete" 'dir)))
+    (unwind-protect
+        (progn
+          (exercism-ert--write-minimal-exercise exercise-dir "hello.el")
+          (should (exercism--exercise-downloaded-p exercise-dir)))
+      (when (file-exists-p exercise-dir)
+        (delete-directory exercise-dir t)))))
 
 (ert-deftest exercism--exercise-list-solved-p ()
   (should (exercism--exercise-list-solved-p "published"))
@@ -912,10 +985,191 @@
           (advice-add #'exercism--download-exercise :around
                       #'exercism-ert--download-exercise-recorder)
           (exercism--open-exercise-slug slug)
-          (should (equal (list slug track) exercism-ert--download-args))
+          (should (equal (list slug track nil) exercism-ert--download-args))
           (should (string= exercism--current-exercise slug)))
       (advice-remove #'exercism--download-exercise
                      #'exercism-ert--download-exercise-recorder)
+      (when (file-exists-p workspace)
+        (delete-directory workspace t)))))
+
+(ert-deftest exercism--open-exercise-slug-repairs-incomplete ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "go")
+         (slug "complex-numbers")
+         (exercise-dir (expand-file-name slug (expand-file-name track workspace))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".exercism" exercise-dir) t)
+          (write-region "{\"track\":\"go\",\"exercise\":\"complex-numbers\"}"
+                        nil
+                        (expand-file-name ".exercism/metadata.json" exercise-dir))
+          (setq exercism--current-track track
+                exercism--current-exercise nil
+                exercism--workspace workspace
+                exercism-ert--download-args nil)
+          (advice-add #'exercism--download-exercise :around
+                      #'exercism-ert--download-exercise-recorder)
+          (exercism--open-exercise-slug slug)
+          (should (equal (list slug track t) exercism-ert--download-args))
+          (should (string= exercism--current-exercise slug)))
+      (advice-remove #'exercism--download-exercise
+                     #'exercism-ert--download-exercise-recorder)
+      (when (file-exists-p workspace)
+        (delete-directory workspace t)))))
+
+(ert-deftest exercism--open-exercise-slug-download-failure ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "emacs-lisp")
+         (slug "two-fer")
+         (track-dir (expand-file-name track workspace)))
+    (unwind-protect
+        (progn
+          (make-directory track-dir t)
+          (setq exercism--current-track track
+                exercism--current-exercise nil
+                exercism--workspace workspace)
+          (cl-letf (((symbol-function 'exercism--download-exercise)
+                     (lambda (_slug _track callback &optional _force)
+                       (funcall callback 1 "Error: 429 Too Many Requests"))))
+            (exercism--open-exercise-slug slug)
+            (should-not exercism--current-exercise)))
+      (when (file-exists-p workspace)
+        (delete-directory workspace t)))))
+
+(ert-deftest exercism--track-init-repairs-incomplete-hello-world ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "go")
+         (hello-dir (expand-file-name "hello-world"
+                                      (expand-file-name track workspace)))
+         (callback-result nil))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".exercism" hello-dir) t)
+          (write-region "{\"track\":\"go\",\"exercise\":\"hello-world\"}"
+                        nil
+                        (expand-file-name ".exercism/metadata.json" hello-dir))
+          (setq exercism--workspace workspace
+                exercism-ert--download-args nil)
+          (advice-add #'exercism--download-exercise :around
+                      #'exercism-ert--download-exercise-recorder)
+          (exercism--track-init
+           track
+           (lambda (result) (setq callback-result result)))
+          (should (equal (list "hello-world" track t) exercism-ert--download-args))
+          (should (string= "Downloaded" callback-result)))
+      (advice-remove #'exercism--download-exercise
+                     #'exercism-ert--download-exercise-recorder)
+      (when (file-exists-p workspace)
+        (delete-directory workspace t)))))
+
+(ert-deftest exercism-download-all-skips-complete-and-queues-incomplete ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "go")
+         (track-dir (expand-file-name track workspace))
+         (calls nil)
+         (exercism--download-all-delay 0)
+         (exercism--download-all-rate-limit-backoff 0)
+         (exercism--download-all-schedule-fn
+          (lambda (_seconds _repeat fn) (funcall fn))))
+    (unwind-protect
+        (progn
+          (make-directory track-dir t)
+          (exercism-ert--write-minimal-exercise
+           (expand-file-name "hello-world" track-dir))
+          (make-directory
+           (expand-file-name "bob/.exercism" track-dir) t)
+          (write-region "{}" nil
+                        (expand-file-name "bob/.exercism/metadata.json" track-dir))
+          (setq exercism--current-track track
+                exercism--workspace workspace)
+          (cl-letf (((symbol-function 'exercism--list-exercises)
+                     (lambda (_track _only-unlocked callback)
+                       (funcall callback
+                                '(((slug . "hello-world") (is_unlocked . t))
+                                  ((slug . "bob") (is_unlocked . t))
+                                  ((slug . "two-fer") (is_unlocked . t))))))
+                    ((symbol-function 'exercism--download-exercise)
+                     (lambda (slug _track callback &optional force)
+                       (push (list slug force) calls)
+                       (exercism-ert--write-minimal-exercise
+                        (exercism--exercise-dir-for-slug slug))
+                       (funcall callback 0 "Downloaded"))))
+            (exercism-download-all-unlocked-exercises)
+            (should (equal (nreverse calls)
+                           '(("bob" t) ("two-fer" nil))))))
+      (when (file-exists-p workspace)
+        (delete-directory workspace t)))))
+
+(ert-deftest exercism-download-all-is-sequential ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "go")
+         (started nil)
+         (pending-callbacks nil)
+         (exercism--download-all-delay 0)
+         (exercism--download-all-rate-limit-backoff 0)
+         (exercism--download-all-schedule-fn
+          (lambda (_seconds _repeat fn) (funcall fn))))
+    (cl-labels ((complete-oldest ()
+                  (let* ((entry (car (last pending-callbacks)))
+                         (slug (car entry))
+                         (cb (cdr entry)))
+                    (setq pending-callbacks (butlast pending-callbacks))
+                    (exercism-ert--write-minimal-exercise
+                     (exercism--exercise-dir-for-slug slug))
+                    (funcall cb 0 "Downloaded"))))
+      (unwind-protect
+          (progn
+            (make-directory (expand-file-name track workspace) t)
+            (setq exercism--current-track track
+                  exercism--workspace workspace)
+            (cl-letf (((symbol-function 'exercism--list-exercises)
+                       (lambda (_track _only-unlocked callback)
+                         (funcall callback
+                                  '(((slug . "a") (is_unlocked . t))
+                                    ((slug . "b") (is_unlocked . t))
+                                    ((slug . "c") (is_unlocked . t))))))
+                      ((symbol-function 'exercism--download-exercise)
+                       (lambda (slug _track callback &optional _force)
+                         (push slug started)
+                         (push (cons slug callback) pending-callbacks))))
+              (exercism-download-all-unlocked-exercises)
+              (should (equal (nreverse (copy-sequence started)) '("a")))
+              (complete-oldest)
+              (should (equal (nreverse (copy-sequence started)) '("a" "b")))
+              (complete-oldest)
+              (should (equal (nreverse (copy-sequence started)) '("a" "b" "c")))))
+        (when (file-exists-p workspace)
+          (delete-directory workspace t))))))
+
+(ert-deftest exercism-download-all-retries-once-on-rate-limit ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "go")
+         (attempts 0)
+         (exercism--download-all-delay 0)
+         (exercism--download-all-rate-limit-backoff 0)
+         (exercism--download-all-schedule-fn
+          (lambda (_seconds _repeat fn) (funcall fn))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name track workspace) t)
+          (setq exercism--current-track track
+                exercism--workspace workspace)
+          (cl-letf (((symbol-function 'exercism--list-exercises)
+                     (lambda (_track _only-unlocked callback)
+                       (funcall callback
+                                '(((slug . "bob") (is_unlocked . t))))))
+                    ((symbol-function 'exercism--download-exercise)
+                     (lambda (slug _track callback &optional _force)
+                       (setq attempts (1+ attempts))
+                       (if (< attempts 2)
+                           (funcall callback 1 "Error: 429 Too Many Requests")
+                         (exercism-ert--write-minimal-exercise
+                          (exercism--exercise-dir-for-slug slug))
+                         (funcall callback 0 "Downloaded")))))
+            (exercism-download-all-unlocked-exercises)
+            (should (= 2 attempts))
+            (should (exercism--exercise-downloaded-p
+                     (exercism--exercise-dir-for-slug "bob")))))
       (when (file-exists-p workspace)
         (delete-directory workspace t)))))
 

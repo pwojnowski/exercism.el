@@ -536,6 +536,16 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
   "Return the primary solution file path for EXERCISE-DIR, or nil."
   (car (exercism--solution-file-paths exercise-dir)))
 
+(defun exercism--exercise-downloaded-p (exercise-dir)
+  "Return non-nil when EXERCISE-DIR is a complete Exercism download."
+  (when (file-directory-p exercise-dir)
+    (let ((config-path (expand-file-name ".exercism/config.json" exercise-dir)))
+      (when (file-readable-p config-path)
+        (condition-case nil
+            (let ((paths (exercism--solution-file-paths exercise-dir)))
+              (and paths (seq-every-p #'file-exists-p paths)))
+          (error nil))))))
+
 (defun exercism--open-exercise-dir (exercise-dir)
   "Visit EXERCISE-DIR by opening its primary solution file."
   (let ((solution-file (exercism--primary-solution-file exercise-dir)))
@@ -565,7 +575,7 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
     (message "[exercism] already submitting %s" slug)
     (cl-return-from exercism--submit-slug))
   (let ((exercise-dir (exercism--exercise-dir-for-slug slug)))
-    (unless (file-directory-p exercise-dir)
+    (unless (exercism--exercise-downloaded-p exercise-dir)
       (user-error "Exercise %s is not downloaded" slug))
     (let* ((solution-files (exercism--solution-file-paths exercise-dir))
            (default-directory exercise-dir)
@@ -599,7 +609,7 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
 (defun exercism--open-exercise-slug (slug)
   "Download SLUG on the current track if needed, then open it."
   (let ((exercise-dir (exercism--exercise-dir-for-slug slug)))
-    (if (file-exists-p exercise-dir)
+    (if (exercism--exercise-downloaded-p exercise-dir)
         (progn
           (exercism--open-exercise-dir exercise-dir)
           (setq exercism--current-exercise slug)
@@ -608,12 +618,61 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
                exercism--current-track slug)
       (exercism--download-exercise
        slug exercism--current-track
-       (lambda (result)
+       (lambda (exit-code result)
          (message "[exercism] download result: %s" result)
-         (when (file-exists-p exercise-dir)
-           (exercism--open-exercise-dir exercise-dir))
-         (setq exercism--current-exercise slug)
-         (exercism--save-state))))))
+         (when (exercism--download-succeeded-p exit-code result exercise-dir)
+           (exercism--open-exercise-dir exercise-dir)
+           (setq exercism--current-exercise slug)
+           (exercism--save-state)))
+       (file-directory-p exercise-dir)))))
+
+(defvar exercism--download-all-delay 1.0
+  "Seconds to wait between successful download-all queue items.")
+
+(defvar exercism--download-all-rate-limit-backoff 5.0
+  "Seconds to wait before retrying a rate-limited download-all item.")
+
+(defvar exercism--download-all-schedule-fn #'run-at-time
+  "Scheduler used by download-all; tests may bind a synchronous function.")
+
+(defun exercism--download-all-schedule (seconds function)
+  "Run FUNCTION after SECONDS using `exercism--download-all-schedule-fn'."
+  (funcall exercism--download-all-schedule-fn seconds nil function))
+
+(defun exercism--download-all-queue (queue downloaded failed skipped &optional retrying)
+  "Download QUEUE slugs sequentially, then report DOWNLOADED/FAILED/SKIPPED."
+  (if (null queue)
+      (message "[exercism] download-all finished: %d downloaded, %d skipped, %d failed"
+               downloaded skipped failed)
+    (let* ((slug (car queue))
+           (rest (cdr queue))
+           (exercise-dir (exercism--exercise-dir-for-slug slug))
+           (force (file-directory-p exercise-dir)))
+      (message "[exercism] attempting to download %s exercise %s..."
+               exercism--current-track slug)
+      (exercism--download-exercise
+       slug exercism--current-track
+       (lambda (exit-code result)
+         (cond
+          ((exercism--download-succeeded-p exit-code result exercise-dir)
+           (exercism--download-all-schedule
+            exercism--download-all-delay
+            (lambda ()
+              (exercism--download-all-queue rest (1+ downloaded) failed skipped))))
+          ((and (not retrying) (exercism--cli-rate-limited-p result))
+           (message "[exercism] rate limited on %s; retrying after backoff..." slug)
+           (exercism--download-all-schedule
+            exercism--download-all-rate-limit-backoff
+            (lambda ()
+              (exercism--download-all-queue queue downloaded failed skipped t))))
+          (t
+           (message "[exercism] download failed for %s: %s"
+                    slug (string-trim result))
+           (exercism--download-all-schedule
+            exercism--download-all-delay
+            (lambda ()
+              (exercism--download-all-queue rest downloaded (1+ failed) skipped))))))
+       force))))
 
 (defun exercism-download-all-unlocked-exercises ()
   "Download all unlocked exercises for the current track."
@@ -623,14 +682,20 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
   (exercism--list-exercises
    exercism--current-track t
    (lambda (track-exercises)
-     (seq-doseq (exercise track-exercises)
-       (let* ((slug (exercism--json-value (exercism--plist-get exercise 'slug)))
-              (exercise-dir (exercism--exercise-dir-for-slug slug)))
-         (unless (file-exists-p exercise-dir)
-           (message "[exercism] attempting to download %s exercise %s..."
-                    exercism--current-track slug)
-           (exercism--download-exercise slug exercism--current-track
-                                        (lambda (_result) nil))))))))
+     (let* ((slugs (mapcar (lambda (exercise)
+                             (exercism--json-value
+                              (exercism--plist-get exercise 'slug)))
+                           track-exercises))
+            (pending (seq-filter
+                      (lambda (slug)
+                        (not (exercism--exercise-downloaded-p
+                              (exercism--exercise-dir-for-slug slug))))
+                      slugs))
+            (skipped (- (length slugs) (length pending))))
+       (if (null pending)
+           (message "[exercism] download-all finished: 0 downloaded, %d skipped, 0 failed"
+                    skipped)
+         (exercism--download-all-queue pending 0 0 skipped))))))
 
 ;;;; Tests
 
@@ -653,7 +718,7 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
   "Run tests for SLUG on `exercism--current-track'."
   (exercism--ensure-current-track)
   (let ((exercise-dir (exercism--exercise-dir-for-slug slug)))
-    (unless (file-directory-p exercise-dir)
+    (unless (exercism--exercise-downloaded-p exercise-dir)
       (user-error "Exercise %s is not downloaded" slug))
     (exercism--run-tests-in-dir exercise-dir)))
 
