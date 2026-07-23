@@ -113,7 +113,8 @@ Optional FRAME cycles animation when STATE is `submitting'."
     (define-key map (kbd "n") #'exercism-exercise-list-next)
     (define-key map (kbd "p") #'exercism-exercise-list-previous)
     (define-key map (kbd "g") #'exercism-exercise-list-reload)
-    (define-key map (kbd "d") #'exercism-download-all-unlocked-exercises)
+    (define-key map (kbd "d") #'exercism-exercise-list-download-exercise)
+    (define-key map (kbd "D") #'exercism-download-all-unlocked-exercises)
     (define-key map (kbd "t") #'exercism-exercise-list-set-track)
     (define-key map (kbd "c") #'exercism-configure)
     (define-key map (kbd "C") #'exercism-self-check)
@@ -129,7 +130,7 @@ Optional FRAME cycles animation when STATE is `submitting'."
   "Title shown in the exercise list buffer.")
 
 (defconst exercism-exercise-list-key-help
-  "RET open | s submit | r test | b browser | d download all | t track"
+  "RET open | s submit | r test | b browser | d download | D download all | t track"
   "Short key help shown in the exercise list heading.")
 
 (defconst exercism-exercise-list-full-key-help
@@ -140,7 +141,8 @@ RET  Open exercise (download if needed)
 s    Submit
 r    Run tests
 b    Open in browser
-d    Download all unlocked
+d    Download current
+D    Download all unlocked
 t    Track picker
 
 n/p  Next / previous
@@ -265,6 +267,12 @@ q    Quit
   "Open the exercise on the current line, downloading if needed."
   (interactive)
   (exercism--open-exercise-slug
+   (exercism-exercise-list--require-unlocked-slug-at-point)))
+
+(defun exercism-exercise-list-download-exercise ()
+  "Download the exercise on the current line (force if incomplete)."
+  (interactive)
+  (exercism--download-exercise-slug
    (exercism-exercise-list--require-unlocked-slug-at-point)))
 
 (defun exercism-exercise-list-submit-exercise ()
@@ -605,6 +613,22 @@ Pass DISPLAY-P as `no-display' to re-render without changing windows."
   "Submit your implementation, then open the submission page in a browser."
   (interactive)
   (exercism--submit t))
+
+(defun exercism--download-exercise-slug (slug)
+  "Download SLUG on the current track if incomplete, forcing when the dir exists."
+  (let ((exercise-dir (exercism--exercise-dir-for-slug slug)))
+    (if (exercism--exercise-downloaded-p exercise-dir)
+        (message "[exercism] %s already downloaded" slug)
+      (message "[exercism] downloading %s exercise %s... (please wait)"
+               exercism--current-track slug)
+      (exercism--download-exercise
+       slug exercism--current-track
+       (lambda (exit-code result)
+         (message "[exercism] download result: %s" result)
+         (unless (exercism--download-succeeded-p exit-code result exercise-dir)
+           (message "[exercism] download failed for %s: %s"
+                    slug (string-trim result))))
+       (file-directory-p exercise-dir)))))
 
 (defun exercism--open-exercise-slug (slug)
   "Download SLUG on the current track if needed, then open it."

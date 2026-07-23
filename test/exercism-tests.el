@@ -100,6 +100,12 @@
 
 (defvar exercism-ert--opened-slug nil)
 
+(defun exercism-ert--download-slug-recorder (orig slug)
+  "Advice that records the slug passed to `exercism--download-exercise-slug'."
+  (setq exercism-ert--downloaded-slug slug))
+
+(defvar exercism-ert--downloaded-slug nil)
+
 (defvar exercism-ert--submit-slug nil)
 
 (defvar exercism-ert--submit-command nil)
@@ -860,7 +866,7 @@
   (should-not (lookup-key exercism-exercise-list-mode-map "u")))
 
 (ert-deftest exercism-exercise-list-key-help-short ()
-  (should (equal "RET open | s submit | r test | b browser | d download all | t track"
+  (should (equal "RET open | s submit | r test | b browser | d download | D download all | t track"
                  exercism-exercise-list-key-help)))
 
 (ert-deftest exercism-exercise-list-shows-short-key-help ()
@@ -870,10 +876,16 @@
    (lambda ()
      (let ((text (buffer-string)))
        (should (string-match-p
-                "RET open | s submit | r test | b browser | d download all | t track"
+                "RET open | s submit | r test | b browser | d download | D download all | t track"
                 text))
        (should-not (string-match-p "submit\\+browser" text))
        (should-not (string-match-p "self-check" text))))))
+
+(ert-deftest exercism-exercise-list-download-keys ()
+  (should (eq #'exercism-exercise-list-download-exercise
+              (lookup-key exercism-exercise-list-mode-map "d")))
+  (should (eq #'exercism-download-all-unlocked-exercises
+              (lookup-key exercism-exercise-list-mode-map "D"))))
 
 (ert-deftest exercism-exercise-list-help-key ()
   (should (eq #'exercism-exercise-list-show-help
@@ -895,6 +907,8 @@
           (let ((text (buffer-string)))
             (should (string-match-p "RET\\s-+Open exercise" text))
             (should (string-match-p "s\\s-+Submit" text))
+            (should (string-match-p "d\\s-+Download current" text))
+            (should (string-match-p "D\\s-+Download all unlocked" text))
             (should (string-match-p "C\\s-+Self-check" text))
             (should (string-match-p "c\\s-+Configure" text))
             (should (string-match-p "g\\s-+Reload" text))
@@ -987,6 +1001,69 @@
           (exercism--open-exercise-slug slug)
           (should (equal (list slug track nil) exercism-ert--download-args))
           (should (string= exercism--current-exercise slug)))
+      (advice-remove #'exercism--download-exercise
+                     #'exercism-ert--download-exercise-recorder)
+      (when (file-exists-p workspace)
+        (delete-directory workspace t)))))
+
+(ert-deftest exercism--download-exercise-slug-downloads-missing ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "emacs-lisp")
+         (slug "two-fer")
+         (track-dir (expand-file-name track workspace)))
+    (unwind-protect
+        (progn
+          (make-directory track-dir t)
+          (setq exercism--current-track track
+                exercism--workspace workspace
+                exercism-ert--download-args nil)
+          (advice-add #'exercism--download-exercise :around
+                      #'exercism-ert--download-exercise-recorder)
+          (exercism--download-exercise-slug slug)
+          (should (equal (list slug track nil) exercism-ert--download-args)))
+      (advice-remove #'exercism--download-exercise
+                     #'exercism-ert--download-exercise-recorder)
+      (when (file-exists-p workspace)
+        (delete-directory workspace t)))))
+
+(ert-deftest exercism--download-exercise-slug-repairs-incomplete ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "go")
+         (slug "complex-numbers")
+         (exercise-dir (expand-file-name slug (expand-file-name track workspace))))
+    (unwind-protect
+        (progn
+          (make-directory (expand-file-name ".exercism" exercise-dir) t)
+          (write-region "{\"track\":\"go\",\"exercise\":\"complex-numbers\"}"
+                        nil
+                        (expand-file-name ".exercism/metadata.json" exercise-dir))
+          (setq exercism--current-track track
+                exercism--workspace workspace
+                exercism-ert--download-args nil)
+          (advice-add #'exercism--download-exercise :around
+                      #'exercism-ert--download-exercise-recorder)
+          (exercism--download-exercise-slug slug)
+          (should (equal (list slug track t) exercism-ert--download-args)))
+      (advice-remove #'exercism--download-exercise
+                     #'exercism-ert--download-exercise-recorder)
+      (when (file-exists-p workspace)
+        (delete-directory workspace t)))))
+
+(ert-deftest exercism--download-exercise-slug-skips-complete ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "emacs-lisp")
+         (slug "two-fer")
+         (exercise-dir (expand-file-name slug (expand-file-name track workspace))))
+    (unwind-protect
+        (progn
+          (exercism-ert--write-minimal-exercise exercise-dir)
+          (setq exercism--current-track track
+                exercism--workspace workspace
+                exercism-ert--download-args 'not-called)
+          (advice-add #'exercism--download-exercise :around
+                      #'exercism-ert--download-exercise-recorder)
+          (exercism--download-exercise-slug slug)
+          (should (eq 'not-called exercism-ert--download-args)))
       (advice-remove #'exercism--download-exercise
                      #'exercism-ert--download-exercise-recorder)
       (when (file-exists-p workspace)
@@ -1181,6 +1258,14 @@
      (exercism-ert--goto-exercise-slug "secret-handshake")
      (should-error (exercism-exercise-list-open-exercise) :type 'user-error))))
 
+(ert-deftest exercism-exercise-list-download-exercise-locked ()
+  (exercism-ert--with-exercise-list
+   (exercism-ert--sample-exercises)
+   (exercism-ert--make-solution-table nil)
+   (lambda ()
+     (exercism-ert--goto-exercise-slug "secret-handshake")
+     (should-error (exercism-exercise-list-download-exercise) :type 'user-error))))
+
 (ert-deftest exercism-exercise-list-open-exercise-unlocked ()
   (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
          (track "emacs-lisp")
@@ -1204,6 +1289,32 @@
              (should (equal slug exercism-ert--opened-slug)))))
       (advice-remove #'exercism--open-exercise-slug
                      #'exercism-ert--open-slug-recorder)
+      (when (file-exists-p workspace)
+        (delete-directory workspace t)))))
+
+(ert-deftest exercism-exercise-list-download-exercise-unlocked ()
+  (let* ((workspace (make-temp-file "exercism-workspace" 'dir))
+         (track "emacs-lisp")
+         (slug "two-fer"))
+    (unwind-protect
+        (progn
+          (setq exercism--current-track track
+                exercism--workspace workspace
+                exercism-ert--downloaded-slug nil)
+          (advice-add #'exercism--download-exercise-slug :around
+                      #'exercism-ert--download-slug-recorder)
+          (exercism-ert--with-exercise-list
+           (exercism-ert--sample-exercises)
+           (exercism-ert--make-solution-table
+            '(("hello-world" . "published")
+              ("two-fer" . "started")
+              ("bob" . nil)))
+           (lambda ()
+             (exercism-ert--goto-exercise-slug slug)
+             (exercism-exercise-list-download-exercise)
+             (should (equal slug exercism-ert--downloaded-slug)))))
+      (advice-remove #'exercism--download-exercise-slug
+                     #'exercism-ert--download-slug-recorder)
       (when (file-exists-p workspace)
         (delete-directory workspace t)))))
 
