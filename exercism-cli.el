@@ -106,9 +106,11 @@
 
 (defun exercism--configure (api-token workspace &optional after-callback)
   "Configure the Exercism CLI with API-TOKEN and WORKSPACE.
-When AFTER-CALLBACK is provided, invoke it after configuration succeeds."
+When AFTER-CALLBACK is provided, invoke it after configuration succeeds.
+Create WORKSPACE (and parents) if it does not already exist."
   (setq exercism--api-token api-token
         exercism--workspace (expand-file-name workspace))
+  (make-directory exercism--workspace t)
   (message "[exercism] configuring... (please wait)")
   (when (get-buffer-window (exercism--self-check-buffer) t)
     (exercism--self-check-show-pending "Configuring... (please wait)"))

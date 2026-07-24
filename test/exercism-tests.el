@@ -482,6 +482,26 @@
       (when (file-exists-p config-file) (delete-file config-file))
       (when (file-exists-p workspace) (delete-directory workspace t)))))
 
+(ert-deftest exercism--configure-creates-missing-workspace ()
+  (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
+         (parent (make-temp-file "exercism-parent" 'dir))
+         (workspace (expand-file-name "missing-workspace" parent)))
+    (unwind-protect
+        (progn
+          (write-region "{}" nil config-file)
+          (should-not (file-directory-p workspace))
+          (cl-letf ((exercism-config-path config-file))
+            (advice-add #'exercism--run-shell-command :around
+                        #'exercism-ert--run-shell-command-recorder)
+            (exercism--configure "test-token" workspace)
+            (should (file-directory-p workspace))
+            (should (string-match-p (regexp-quote workspace)
+                                    exercism-ert--submit-command))))
+      (advice-remove #'exercism--run-shell-command
+                     #'exercism-ert--run-shell-command-recorder)
+      (when (file-exists-p config-file) (delete-file config-file))
+      (when (file-exists-p parent) (delete-directory parent t)))))
+
 (ert-deftest exercism--reconcile-state-with-config-stale-workspace ()
   (let* ((config-file (make-temp-file "exercism-user" nil ".json"))
          (state-file (make-temp-file "exercism-state" nil ".el"))
